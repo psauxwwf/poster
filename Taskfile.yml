@@ -40,3 +40,8 @@ tasks:
         -o {{.app_bin}} cmd/{{.app}}/main.go
       - strip {{.app_bin}}
       - objcopy --strip-unneeded {{.app_bin}}
+
+  docker:up:
+    desc: build binaries and start app containers
+    cmds:
+      - docker compose -f docker-compose.yaml up --build --force-recreate

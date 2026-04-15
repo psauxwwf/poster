@@ -2,13 +2,15 @@ FROM golang:1.26-bookworm AS builder
 
 WORKDIR /src
 
+RUN sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/bin
+
 COPY go.mod go.sum ./
-RUN go mod download
+
+RUN go mod tidy
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -trimpath -ldflags="-s -w" -o /out/poster ./cmd/poster
+RUN task build
 
 
 FROM ubuntu:24.04 AS runtime
@@ -24,14 +26,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 WORKDIR /poster
 
-RUN ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime && echo "${TZ}" > /etc/timezone
-
 RUN apt-get update && \
     apt-get install --yes --no-install-recommends \
         curl=* \
-        ca-certificates=* \
-        iproute2=* \
-        libpcap0.8t64=* && \
+        ca-certificates=* && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -39,6 +37,8 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 COPY pyproject.toml uv.lock ./
 RUN uv sync --no-cache
 
-COPY --from=builder /out/poster ./poster
+COPY --from=builder /src/bin/poster ./poster
 
 ENTRYPOINT ["./poster"]
+
+# CMD ["./poster"]

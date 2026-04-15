@@ -207,12 +207,30 @@ func (n *NotebookLM) WaitSource(ctx context.Context, notebookID, sourceID string
 	return nil
 }
 
-func (n *NotebookLM) GenerateReport(ctx context.Context, notebookID, format string) (Artifact, error) {
+func (n *NotebookLM) GenerateReport(
+	ctx context.Context,
+	notebookID, format string, prompt ...string,
+) (Artifact, error) {
 	if strings.TrimSpace(format) == "" {
 		format = "blog-post"
 	}
+	args := []string{
+		"generate",
+		"report",
+		"--format",
+		format,
+		"--notebook",
+		notebookID,
+		"--json",
+	}
+	if len(prompt) > 0 {
+		args = append(args, prompt[0])
+	}
 
-	resp, raw, err := n.runJSON(ctx, "generate", "report", "--format", format, "--notebook", notebookID, "--json")
+	resp, raw, err := n.runJSON(
+		ctx,
+		args...,
+	)
 	if err != nil {
 		return Artifact{}, err
 	}
@@ -230,15 +248,35 @@ func (n *NotebookLM) GenerateReport(ctx context.Context, notebookID, format stri
 	return Artifact{ID: artifactID, Raw: resp}, nil
 }
 
-func (n *NotebookLM) GenerateInfographic(ctx context.Context, notebookID, detail, style string) (Artifact, error) {
+func (n *NotebookLM) GenerateInfographic(
+	ctx context.Context,
+	notebookID, detail, style string, prompt ...string,
+) (Artifact, error) {
 	if strings.TrimSpace(detail) == "" {
 		detail = "detailed"
 	}
 	if strings.TrimSpace(style) == "" {
 		style = "sketch-note"
 	}
+	args := []string{
+		"generate",
+		"infographic",
+		"--detail",
+		detail,
+		"--style",
+		style,
+		"--notebook",
+		notebookID,
+		"--json",
+	}
+	if len(prompt) > 0 {
+		args = append(args, prompt[0])
+	}
 
-	resp, raw, err := n.runJSON(ctx, "generate", "infographic", "--detail", detail, "--style", style, "--notebook", notebookID, "--json")
+	resp, raw, err := n.runJSON(
+		ctx,
+		args...,
+	)
 	if err != nil {
 		return Artifact{}, err
 	}

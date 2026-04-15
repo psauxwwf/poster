@@ -1,0 +1,3 @@
+- [x] Dockerfile with path to ~/.notebooklm and docker-compose.yaml
+- [x] Telegram style for md
+- [ ] Input from telegram bot, out to tg bot

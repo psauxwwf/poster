@@ -1,0 +1,14 @@
+.git
+.gitignore
+
+bin/
+dist/
+
+.env
+.env.*
+
+.venv/
+__pycache__/
+*.pyc
+
+TODO.md

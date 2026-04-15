@@ -13,6 +13,11 @@ import (
 	"unicode/utf8"
 
 	"poster/pkg/notebooklm"
+	"poster/pkg/tg"
+)
+
+const (
+	infographicStyle = "Design a retro-futuristic Fallout-inspired infographic: 1950s atomic-age poster aesthetic, Vault-Tec style iconography, worn paper texture, muted olive and amber palette, bold block headings, simple technical callouts, and optimistic-but-cautionary tone. Keep all text highly readable and preserve factual accuracy from the source."
 )
 
 type Poster struct {
@@ -66,33 +71,53 @@ func (p *Poster) Run(url string) error {
 	if err != nil {
 		return fmt.Errorf("create notebook: %w", err)
 	}
-	fmt.Printf("notebook_id=%s\n", notebook.ID)
+	slog.Info("notebook created", "notebook_id", notebook.ID)
 
 	source, err := p.notebooklm.AddSource(ctx, notebook.ID, url)
 	if err != nil {
 		return fmt.Errorf("add source: %w", err)
 	}
-	fmt.Printf("source_id=%s\n", source.ID)
+	slog.Info("source added", "source_id", source.ID)
 
-	if err := p.notebooklm.WaitSource(ctx, notebook.ID, source.ID, p.timeoutSource); err != nil {
+	if err := p.notebooklm.WaitSource(
+		ctx,
+		notebook.ID,
+		source.ID,
+		p.timeoutSource,
+	); err != nil {
 		return fmt.Errorf("source wait failed: %w; manual retry: notebooklm source wait %s -n %s --timeout %d", err, source.ID, notebook.ID, int(p.timeoutSource.Seconds()))
 	}
 
-	reportArtifact, err := p.notebooklm.GenerateReport(ctx, notebook.ID, "blog-post")
+	reportArtifact, err := p.notebooklm.GenerateReport(
+		ctx,
+		notebook.ID,
+		"blog-post",
+	)
 	if err != nil {
 		return fmt.Errorf("generate report: %w", err)
 	}
-	fmt.Printf("report_artifact_id=%s\n", reportArtifact.ID)
+	slog.Info("report artifact created", "report_artifact_id", reportArtifact.ID)
 
-	if err := p.notebooklm.WaitArtifact(ctx, notebook.ID, reportArtifact.ID, p.timeoutArtifact); err != nil {
+	if err := p.notebooklm.WaitArtifact(
+		ctx,
+		notebook.ID,
+		reportArtifact.ID,
+		p.timeoutArtifact,
+	); err != nil {
 		return fmt.Errorf("report wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, reportArtifact.ID, notebook.ID, int(p.timeoutArtifact.Seconds()))
 	}
 
-	infographicArtifact, err := p.notebooklm.GenerateInfographic(ctx, notebook.ID, "detailed", "sketch-note")
+	infographicArtifact, err := p.notebooklm.GenerateInfographic(
+		ctx,
+		notebook.ID,
+		"detailed",
+		"sketch-note",
+		infographicStyle,
+	)
 	if err != nil {
 		return fmt.Errorf("generate infographic: %w", err)
 	}
-	fmt.Printf("infographic_artifact_id=%s\n", infographicArtifact.ID)
+	slog.Info("infographic artifact created", "infographic_artifact_id", infographicArtifact.ID)
 
 	if err := p.notebooklm.WaitArtifact(ctx, notebook.ID, infographicArtifact.ID, p.timeoutArtifact); err != nil {
 		return fmt.Errorf("infographic wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, infographicArtifact.ID, notebook.ID, int(p.timeoutArtifact.Seconds()))
@@ -102,12 +127,8 @@ func (p *Poster) Run(url string) error {
 		return fmt.Errorf("create output dir: %w", err)
 	}
 
-	fallbackID := source.ID
-	if fallbackID == "" {
-		fallbackID = notebook.ID
-	}
+	baseName := sanitizeTitle(source.Title, 100, notebook.ID)
 
-	baseName := sanitizeTitle(source.Title, 100, "youtube-"+safeIDPart(fallbackID, 12))
 	reportPath, err := uniquePath(p.outDir, baseName, ".md")
 	if err != nil {
 		return fmt.Errorf("pick report path: %w", err)
@@ -116,6 +137,11 @@ func (p *Poster) Run(url string) error {
 	infographicPath, err := uniquePath(p.outDir, baseName, ".png")
 	if err != nil {
 		return fmt.Errorf("pick infographic path: %w", err)
+	}
+
+	tgreportPath, err := uniquePath(p.outDir, baseName, ".tg")
+	if err != nil {
+		return fmt.Errorf("ptck tg report path: %w", err)
 	}
 
 	if err := p.notebooklm.DownloadReport(ctx, notebook.ID, reportArtifact.ID, reportPath); err != nil {
@@ -130,9 +156,26 @@ func (p *Poster) Run(url string) error {
 		return fmt.Errorf("rename notebook: %w", err)
 	}
 
-	fmt.Printf("output_report=%s\n", reportPath)
-	fmt.Printf("output_infographic=%s\n", infographicPath)
-	fmt.Printf("notebook_title=%s\n", baseName)
+	report, err := os.ReadFile(reportPath)
+	if err != nil {
+		return fmt.Errorf("open report md: %w", err)
+	}
+
+	if err := os.WriteFile(tgreportPath, tg.MarkdownToTelegramHTML(report), 0o644); err != nil {
+		return fmt.Errorf("save tg report: %w", err)
+	}
+
+	slog.Info(
+		"outputs saved",
+		"output_report",
+		reportPath,
+		"output_tg_report",
+		tgreportPath,
+		"output_infographic",
+		infographicPath,
+		"notebook_title",
+		baseName,
+	)
 
 	return nil
 }
@@ -169,7 +212,7 @@ var (
 
 func sanitizeTitle(input string, maxLen int, fallback string) string {
 	name := strings.TrimSpace(input)
-	name = forbiddenChars.ReplaceAllString(name, "-")
+	name = forbiddenChars.ReplaceAllString(name, "")
 	name = spaces.ReplaceAllString(name, " ")
 	name = strings.Trim(name, " .")
 
