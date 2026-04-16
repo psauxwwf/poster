@@ -10,6 +10,11 @@ services:
     volumes:
       - ~/.notebooklm:/root/.notebooklm
     network_mode: "host"
+    environment:
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_ADMIN_ID: ""
+    env_file:
+      - .env
     # command:
     #   - sleep
     #   - infinity

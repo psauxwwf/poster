@@ -2,15 +2,14 @@ package poster
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"regexp"
+	"os/signal"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
-	"unicode/utf8"
 
 	"poster/pkg/notebooklm"
 	"poster/pkg/tg"
@@ -18,6 +17,7 @@ import (
 
 const (
 	infographicStyle = "Design a retro-futuristic Fallout-inspired infographic: 1950s atomic-age poster aesthetic, Vault-Tec style iconography, worn paper texture, muted olive and amber palette, bold block headings, simple technical callouts, and optimistic-but-cautionary tone. Keep all text highly readable and preserve factual accuracy from the source."
+	reportPrompt     = "Write a concise blog post in Markdown. If the source video is short (under 10 minutes), keep the post around 1024 characters; if it is longer, no strict length limit. Use expressive formatting and emojis where appropriate. Emphasize code examples often and include rich Markdown constructs that convert well to Telegram HTML: italic, underline, strikethrough, spoiler, links, inline monospace code, fenced code blocks, language-tagged code blocks, blockquotes, and collapsible quotes. Keep facts accurate and tied to the source."
 )
 
 type Poster struct {
@@ -27,6 +27,14 @@ type Poster struct {
 	timeoutSource   time.Duration
 	timeoutArtifact time.Duration
 }
+
+type Mode int
+
+const (
+	ModeURL Mode = iota
+	ModeServe
+	ModeDelete
+)
 
 func New(_outDir string, _timeoutSource, _timeoutArtifact time.Duration, _notebookLMBinary string) (*Poster, error) {
 	_outDir = strings.TrimSpace(_outDir)
@@ -55,129 +63,94 @@ func New(_outDir string, _timeoutSource, _timeoutArtifact time.Duration, _notebo
 	}, nil
 }
 
-func (p *Poster) Run(url string) error {
-	if strings.TrimSpace(url) == "" {
-		return fmt.Errorf("empty url")
-	}
-
-	ctx := context.Background()
-
-	if err := p.notebooklm.Status(ctx); err != nil {
-		return fmt.Errorf("notebooklm is not ready: %w; run `notebooklm login`", err)
-	}
-
-	notebookName := fmt.Sprintf("yt-import-%s", time.Now().UTC().Format("20060102-150405"))
-	notebook, err := p.notebooklm.CreateNotebook(ctx, notebookName)
-	if err != nil {
-		return fmt.Errorf("create notebook: %w", err)
-	}
-	slog.Info("notebook created", "notebook_id", notebook.ID)
-
-	source, err := p.notebooklm.AddSource(ctx, notebook.ID, url)
-	if err != nil {
-		return fmt.Errorf("add source: %w", err)
-	}
-	slog.Info("source added", "source_id", source.ID)
-
-	if err := p.notebooklm.WaitSource(
-		ctx,
-		notebook.ID,
-		source.ID,
+func (p *Poster) ytRun(url string) (notebooklm.YouTubePipelineOutput, error) {
+	result, err := p.notebooklm.RunYouTubePipeline(
+		context.Background(),
+		url,
+		p.outDir,
 		p.timeoutSource,
-	); err != nil {
-		return fmt.Errorf("source wait failed: %w; manual retry: notebooklm source wait %s -n %s --timeout %d", err, source.ID, notebook.ID, int(p.timeoutSource.Seconds()))
-	}
-
-	reportArtifact, err := p.notebooklm.GenerateReport(
-		ctx,
-		notebook.ID,
-		"blog-post",
-	)
-	if err != nil {
-		return fmt.Errorf("generate report: %w", err)
-	}
-	slog.Info("report artifact created", "report_artifact_id", reportArtifact.ID)
-
-	if err := p.notebooklm.WaitArtifact(
-		ctx,
-		notebook.ID,
-		reportArtifact.ID,
 		p.timeoutArtifact,
-	); err != nil {
-		return fmt.Errorf("report wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, reportArtifact.ID, notebook.ID, int(p.timeoutArtifact.Seconds()))
-	}
-
-	infographicArtifact, err := p.notebooklm.GenerateInfographic(
-		ctx,
-		notebook.ID,
-		"detailed",
-		"sketch-note",
+		reportPrompt,
 		infographicStyle,
 	)
 	if err != nil {
-		return fmt.Errorf("generate infographic: %w", err)
-	}
-	slog.Info("infographic artifact created", "infographic_artifact_id", infographicArtifact.ID)
-
-	if err := p.notebooklm.WaitArtifact(ctx, notebook.ID, infographicArtifact.ID, p.timeoutArtifact); err != nil {
-		return fmt.Errorf("infographic wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, infographicArtifact.ID, notebook.ID, int(p.timeoutArtifact.Seconds()))
-	}
-
-	if err := os.MkdirAll(p.outDir, 0o755); err != nil {
-		return fmt.Errorf("create output dir: %w", err)
-	}
-
-	baseName := sanitizeTitle(source.Title, 100, notebook.ID)
-
-	reportPath, err := uniquePath(p.outDir, baseName, ".md")
-	if err != nil {
-		return fmt.Errorf("pick report path: %w", err)
-	}
-
-	infographicPath, err := uniquePath(p.outDir, baseName, ".png")
-	if err != nil {
-		return fmt.Errorf("pick infographic path: %w", err)
-	}
-
-	tgreportPath, err := uniquePath(p.outDir, baseName, ".tg")
-	if err != nil {
-		return fmt.Errorf("ptck tg report path: %w", err)
-	}
-
-	if err := p.notebooklm.DownloadReport(ctx, notebook.ID, reportArtifact.ID, reportPath); err != nil {
-		return fmt.Errorf("download report: %w", err)
-	}
-
-	if err := p.notebooklm.DownloadInfographic(ctx, notebook.ID, infographicArtifact.ID, infographicPath); err != nil {
-		return fmt.Errorf("download infographic: %w", err)
-	}
-
-	if err := p.notebooklm.RenameNotebook(ctx, notebook.ID, baseName); err != nil {
-		return fmt.Errorf("rename notebook: %w", err)
-	}
-
-	report, err := os.ReadFile(reportPath)
-	if err != nil {
-		return fmt.Errorf("open report md: %w", err)
-	}
-
-	if err := os.WriteFile(tgreportPath, tg.MarkdownToTelegramHTML(report), 0o644); err != nil {
-		return fmt.Errorf("save tg report: %w", err)
+		return notebooklm.YouTubePipelineOutput{}, err
 	}
 
 	slog.Info(
-		"outputs saved",
-		"output_report",
-		reportPath,
-		"output_tg_report",
-		tgreportPath,
-		"output_infographic",
-		infographicPath,
-		"notebook_title",
-		baseName,
+		"outputs prepared",
+		"report_bytes",
+		len(result.Report),
+		"image_bytes",
+		len(result.Image),
 	)
 
+	return result, nil
+}
+
+func (p *Poster) Execute(args []string, mode Mode, token string, adminID string) error {
+	switch mode {
+	case ModeDelete:
+		if err := p.DeleteAll(); err != nil {
+			slog.Error("delete-all failed", "error", err)
+			return err
+		}
+		return nil
+	case ModeServe:
+		if err := p.Serve(token, adminID); err != nil {
+			slog.Error("telegram bot stopped with error", "error", err)
+			return err
+		}
+		return nil
+	case ModeURL:
+		url := args[0]
+		slog.Info("starting poster pipeline", "url", url)
+		if _, err := p.ytRun(url); err != nil {
+			slog.Error("poster pipeline failed", "error", err)
+			return err
+		}
+		slog.Info("poster pipeline completed")
+		return nil
+	default:
+		return fmt.Errorf("unknown mode: %d", mode)
+	}
+}
+
+func (p *Poster) Serve(token string, adminID string) error {
+	parsedAdminID, err := strconv.ParseInt(strings.TrimSpace(adminID), 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid TELEGRAM_ADMIN_ID: %w", err)
+	}
+
+	bot, err := tg.New(token)
+	if err != nil {
+		return fmt.Errorf("telegram bot init failed: %w", err)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	slog.Info("telegram bot started", "mode", "serve")
+	if err := bot.Run(ctx, parsedAdminID, p.ytHandler()); err != nil {
+		return err
+	}
+
+	slog.Info("telegram bot stopped")
 	return nil
+}
+
+func (p *Poster) ytHandler() func(chatID int64, ytURL string) ([]byte, []byte, error) {
+	return func(chatID int64, ytURL string) ([]byte, []byte, error) {
+		slog.Info("starting poster pipeline from telegram", "chat_id", chatID, "url", ytURL)
+		result, err := p.ytRun(ytURL)
+		if err != nil {
+			slog.Error("poster pipeline failed", "chat_id", chatID, "error", err)
+			return nil, nil, err
+		}
+
+		slog.Info("poster pipeline completed", "chat_id", chatID, "url", ytURL)
+		return result.Image, result.Report, nil
+	}
 }
 
 func (p *Poster) DeleteAll() error {
@@ -202,80 +175,4 @@ func (p *Poster) DeleteAll() error {
 
 	slog.Info("delete-all completed", "deleted", len(ids))
 	return nil
-}
-
-var (
-	forbiddenChars = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1F]`)
-	spaces         = regexp.MustCompile(`\s+`)
-	idUnsafe       = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
-)
-
-func sanitizeTitle(input string, maxLen int, fallback string) string {
-	name := strings.TrimSpace(input)
-	name = forbiddenChars.ReplaceAllString(name, "")
-	name = spaces.ReplaceAllString(name, " ")
-	name = strings.Trim(name, " .")
-
-	if maxLen > 0 && utf8.RuneCountInString(name) > maxLen {
-		runes := []rune(name)
-		name = string(runes[:maxLen])
-		name = strings.Trim(name, " .")
-	}
-
-	if name == "" {
-		name = strings.TrimSpace(fallback)
-	}
-	if name == "" {
-		name = "youtube"
-	}
-
-	return name
-}
-
-func safeIDPart(raw string, maxLen int) string {
-	text := idUnsafe.ReplaceAllString(strings.TrimSpace(raw), "")
-	if maxLen > 0 && len(text) > maxLen {
-		text = text[:maxLen]
-	}
-	if text == "" {
-		return "id"
-	}
-
-	return text
-}
-
-func uniquePath(dir, baseName, ext string) (string, error) {
-	if ext != "" && !strings.HasPrefix(ext, ".") {
-		ext = "." + ext
-	}
-
-	first := filepath.Join(dir, baseName+ext)
-	if ok, err := exists(first); err != nil {
-		return "", err
-	} else if !ok {
-		return first, nil
-	}
-
-	for idx := 2; ; idx++ {
-		candidate := filepath.Join(dir, fmt.Sprintf("%s-%d%s", baseName, idx, ext))
-		ok, err := exists(candidate)
-		if err != nil {
-			return "", err
-		}
-		if !ok {
-			return candidate, nil
-		}
-	}
-}
-
-func exists(path string) (bool, error) {
-	_, err := os.Stat(path)
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-
-	return false, err
 }

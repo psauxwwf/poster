@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"poster/internal/poster"
@@ -11,23 +12,31 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type Mode int
+
+const (
+	urlMode Mode = iota
+	serveMode
+	deleteMode
+)
+
 func main() {
 	var (
-		url             string
 		outDir          string
 		timeoutSource   time.Duration
 		timeoutArtifact time.Duration
 		notebookLMBin   string
 		logLevel        string
 		logFile         string
-		deleteAll       bool
+		delete          bool
+		serve           bool
 	)
 
 	rootCmd := &cobra.Command{
-		Use:   "poster <url>",
+		Use:   "poster [url]",
 		Short: "Automates NotebookLM pipeline for YouTube URLs",
 		Args: func(cmd *cobra.Command, args []string) error {
-			if deleteAll {
+			if delete || serve {
 				return nil
 			}
 			return cobra.ExactArgs(1)(cmd, args)
@@ -65,28 +74,41 @@ func main() {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_poster, err := poster.New(outDir, timeoutSource, timeoutArtifact, notebookLMBin)
-			if err != nil {
-				slog.Error("poster init failed", "error", err)
-				return err
+			mode := poster.ModeURL
+			if delete {
+				mode = poster.ModeDelete
+			} else if serve {
+				mode = poster.ModeServe
 			}
 
-			if deleteAll {
-				if err := _poster.DeleteAll(); err != nil {
-					slog.Error("delete-all failed", "error", err)
+			runMain := func() error {
+				_poster, err := poster.New(outDir, timeoutSource, timeoutArtifact, notebookLMBin)
+				if err != nil {
+					slog.Error("poster init failed", "error", err)
 					return err
+				}
+
+				if err := loadDotEnv(".env"); err != nil {
+					return err
+				}
+
+				token := toEnv(os.Getenv("TELEGRAM_BOT_TOKEN"))
+				adminID := toEnv(os.Getenv("TELEGRAM_ADMIN_ID"))
+				return _poster.Execute(args, mode, token, adminID)
+			}
+
+			if mode != poster.ModeServe {
+				return runMain()
+			}
+
+			for {
+				if err := runMain(); err != nil {
+					slog.Error("serve loop failed, restarting", "error", err, "retry_in", "3s")
+					time.Sleep(3 * time.Second)
+					continue
 				}
 				return nil
 			}
-
-			url = args[0]
-			slog.Info("starting poster pipeline", "url", url)
-			if err := _poster.Run(url); err != nil {
-				slog.Error("poster pipeline failed", "error", err)
-				return err
-			}
-			slog.Info("poster pipeline completed")
-			return nil
 		},
 	}
 
@@ -97,10 +119,48 @@ func main() {
 	flags.StringVar(&notebookLMBin, "notebooklm-bin", "notebooklm", "path to notebooklm binary")
 	flags.StringVar(&logLevel, "log-level", "info", "log level: debug, info, warn, error")
 	flags.StringVar(&logFile, "log-file", "", "optional path to JSON log file")
-	flags.BoolVar(&deleteAll, "delete-all", false, "delete all notebooks and exit")
+	flags.BoolVar(&delete, "delete-all", false, "delete all notebooks and exit")
+	flags.BoolVar(&serve, "serve", false, "run telegram bot and process /yt commands")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func loadDotEnv(path string) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+
+	lines := strings.SplitSeq(string(content), "\n")
+	for line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		idx := strings.IndexByte(line, '=')
+		if idx <= 0 {
+			continue
+		}
+
+		key := strings.TrimSpace(line[:idx])
+		value := strings.TrimSpace(line[idx+1:])
+
+		if err := os.Setenv(key, value); err != nil {
+			return fmt.Errorf("set env %s: %w", key, err)
+		}
+	}
+
+	return nil
+}
+
+func toEnv(value string) string {
+	value = strings.TrimSpace(value)
+	return strings.Trim(value, `"`+"'")
 }

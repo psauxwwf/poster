@@ -1,240 +1,177 @@
 package tg
 
 import (
+	"bytes"
+	"context"
 	"fmt"
-	"html"
+	"regexp"
 	"strings"
-	"unicode/utf8"
 
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/text"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-const telegramMessageLimit = 4096
-
-func MarkdownToTelegramHTML(md []byte) []byte {
-	src := []byte(normalizeNewlines(string(md)))
-	doc := goldmark.DefaultParser().Parse(text.NewReader(src))
-
-	blocks := make([]string, 0, doc.ChildCount())
-	for n := doc.FirstChild(); n != nil; n = n.NextSibling() {
-		block := strings.TrimSpace(renderBlock(n, src))
-		if block != "" {
-			blocks = append(blocks, block)
-		}
-	}
-
-	return []byte(strings.Join(blocks, "\n\n"))
+type Tg struct {
+	bot      *tgbotapi.BotAPI
+	youtube  *regexp.Regexp
+	updateTO int
 }
 
-func MarkdownToTelegramHTMLChunks(md []byte, maxLen int) []byte {
-	if maxLen <= 0 {
-		maxLen = telegramMessageLimit
+var botCommands = []tgbotapi.BotCommand{
+	{Command: "start", Description: "show available commands"},
+	{Command: "yt", Description: "run pipeline for YouTube URL"},
+}
+
+const telegramPhotoCaptionLimit = 1024
+
+func New(token string) (*Tg, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, fmt.Errorf("empty telegram token")
 	}
 
-	htmlText := MarkdownToTelegramHTML(md)
-	if strings.TrimSpace(string(htmlText)) == "" {
-		return nil
+	bot, err := tgbotapi.NewBotAPI(token)
+	if err != nil {
+		return nil, fmt.Errorf("init telegram bot: %w", err)
 	}
 
-	blocks := strings.Split(string(htmlText), "\n\n")
-	chunks := make([]string, 0, 4)
-	cur := ""
+	return &Tg{
+		bot:      bot,
+		youtube:  regexp.MustCompile(`https?://\S+`),
+		updateTO: 30,
+	}, nil
+}
 
-	for _, block := range blocks {
-		if block == "" {
-			continue
-		}
+func (t *Tg) RegisterCommands() error {
+	_, err := t.bot.Request(tgbotapi.NewSetMyCommands(botCommands...))
+	if err != nil {
+		return fmt.Errorf("set telegram commands: %w", err)
+	}
 
-		if cur == "" {
-			if runeLen(block) <= maxLen {
-				cur = block
-			} else {
-				chunks = append(chunks, splitByRunes(block, maxLen)...)
+	return nil
+}
+
+func (t *Tg) Run(ctx context.Context, adminID int64, onYT func(chatID int64, url string) ([]byte, []byte, error)) error {
+	if onYT == nil {
+		return fmt.Errorf("onYT handler is nil")
+	}
+	if adminID == 0 {
+		return fmt.Errorf("adminID is required")
+	}
+
+	if err := t.RegisterCommands(); err != nil {
+		return err
+	}
+
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = t.updateTO
+
+	updates := t.bot.GetUpdatesChan(u)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case update, ok := <-updates:
+			if !ok {
+				return nil
 			}
-			continue
-		}
+			if update.Message == nil || !update.Message.IsCommand() {
+				continue
+			}
+			if update.Message.From == nil || update.Message.From.ID != adminID {
+				continue
+			}
 
-		if runeLen(cur)+2+runeLen(block) <= maxLen {
-			cur += "\n\n" + block
-			continue
-		}
-
-		chunks = append(chunks, cur)
-		if runeLen(block) <= maxLen {
-			cur = block
-		} else {
-			chunks = append(chunks, splitByRunes(block, maxLen)...)
-			cur = ""
-		}
-	}
-
-	if cur != "" {
-		chunks = append(chunks, cur)
-	}
-
-	return []byte(strings.Join(chunks, "\n\n"))
-}
-
-func renderBlock(n ast.Node, src []byte) string {
-	switch v := n.(type) {
-	case *ast.Heading:
-		return "<b>" + renderInlines(v, src) + "</b>"
-	case *ast.Paragraph:
-		return renderInlines(v, src)
-	case *ast.Blockquote:
-		parts := make([]string, 0, v.ChildCount())
-		for c := v.FirstChild(); c != nil; c = c.NextSibling() {
-			part := strings.TrimSpace(renderBlock(c, src))
-			if part != "" {
-				parts = append(parts, part)
+			switch update.Message.Command() {
+			case "start":
+				if err := t.SendText(update.Message.Chat.ID, t.availableCommandsText()); err != nil {
+					return err
+				}
+			case "yt":
+				if err := t.handleYT(update.Message.Chat.ID, update.Message.CommandArguments(), onYT); err != nil {
+					return err
+				}
+			default:
+				if err := t.SendText(update.Message.Chat.ID, "Unknown command. Use /yt <youtube-url>"); err != nil {
+					return err
+				}
 			}
 		}
-		return "<blockquote>" + strings.Join(parts, "\n") + "</blockquote>"
-	case *ast.List:
-		return renderList(v, src)
-	case *ast.FencedCodeBlock, *ast.CodeBlock:
-		return renderCodeBlock(n, src)
-	default:
-		if n.FirstChild() != nil {
-			return renderInlines(n, src)
-		}
-		return html.EscapeString(string(n.Text(src)))
 	}
 }
 
-func renderList(list *ast.List, src []byte) string {
-	lines := make([]string, 0, list.ChildCount())
-	idx := list.Start
-	if idx <= 0 {
-		idx = 1
-	}
-
-	for n := list.FirstChild(); n != nil; n = n.NextSibling() {
-		item, ok := n.(*ast.ListItem)
-		if !ok {
-			continue
-		}
-
-		text := strings.TrimSpace(renderListItem(item, src))
-		if text == "" {
-			continue
-		}
-
-		prefix := "• "
-		if list.IsOrdered() {
-			prefix = fmt.Sprintf("%d) ", idx)
-			idx++
-		}
-		lines = append(lines, prefix+text)
+func (t *Tg) availableCommandsText() string {
+	lines := make([]string, 0, len(botCommands)+1)
+	lines = append(lines, "Available commands:")
+	for _, cmd := range botCommands {
+		lines = append(lines, fmt.Sprintf("/%s - %s", cmd.Command, cmd.Description))
 	}
 
 	return strings.Join(lines, "\n")
 }
 
-func renderListItem(item *ast.ListItem, src []byte) string {
-	parts := make([]string, 0, item.ChildCount())
-	for c := item.FirstChild(); c != nil; c = c.NextSibling() {
-		switch v := c.(type) {
-		case *ast.Paragraph:
-			text := strings.TrimSpace(renderInlines(v, src))
-			if text != "" {
-				parts = append(parts, text)
-			}
-		case *ast.List:
-			nested := strings.TrimSpace(renderList(v, src))
-			if nested != "" {
-				parts = append(parts, "\n"+nested)
-			}
-		default:
-			text := strings.TrimSpace(renderBlock(c, src))
-			if text != "" {
-				parts = append(parts, text)
-			}
+func (t *Tg) handleYT(chatID int64, args string, onYT func(chatID int64, url string) ([]byte, []byte, error)) error {
+	url := t.youtube.FindString(strings.TrimSpace(args))
+	if url == "" {
+		return t.SendText(chatID, "Usage: /yt <youtube-url>")
+	}
+
+	if err := t.SendText(chatID, "Accepted, processing..."); err != nil {
+		return err
+	}
+
+	image, report, err := onYT(chatID, url)
+	if err != nil {
+		return t.SendText(chatID, fmt.Sprintf("Failed: %v", err))
+	}
+
+	caption, chunks := MarkdownToTelegramHTMLCaptionAndChunks(report, telegramPhotoCaptionLimit, 0)
+	if err := t.SendPhoto(chatID, image, caption); err != nil {
+		return err
+	}
+
+	for _, chunk := range chunks {
+		if err := t.SendHTML(chatID, chunk); err != nil {
+			return err
 		}
 	}
-	return strings.ReplaceAll(strings.Join(parts, " "), " \n", "\n")
+
+	return nil
 }
 
-func renderCodeBlock(n ast.Node, src []byte) string {
-	lines := n.Lines()
-	var b strings.Builder
-	for i := 0; i < lines.Len(); i++ {
-		seg := lines.At(i)
-		b.Write((&seg).Value(src))
+func (t *Tg) SendText(chatID int64, text string) error {
+	msg := tgbotapi.NewMessage(chatID, text)
+	_, err := t.bot.Send(msg)
+	if err != nil {
+		return fmt.Errorf("send telegram message: %w", err)
 	}
-	return "<pre><code>" + html.EscapeString(strings.TrimRight(b.String(), "\n")) + "</code></pre>"
+
+	return nil
 }
 
-func renderInlines(parent ast.Node, src []byte) string {
-	var b strings.Builder
-	for c := parent.FirstChild(); c != nil; c = c.NextSibling() {
-		b.WriteString(renderInline(c, src))
+func (t *Tg) SendHTML(chatID int64, htmlText string) error {
+	msg := tgbotapi.NewMessage(chatID, htmlText)
+	msg.ParseMode = tgbotapi.ModeHTML
+	_, err := t.bot.Send(msg)
+	if err != nil {
+		return fmt.Errorf("send telegram html message: %w", err)
 	}
-	return b.String()
+
+	return nil
 }
 
-func renderInline(n ast.Node, src []byte) string {
-	switch v := n.(type) {
-	case *ast.Text:
-		text := html.EscapeString(string(v.Segment.Value(src)))
-		if v.HardLineBreak() || v.SoftLineBreak() {
-			return text + "\n"
-		}
-		return text
-	case *ast.String:
-		return html.EscapeString(string(v.Value))
-	case *ast.Emphasis:
-		tag := "i"
-		if v.Level == 2 {
-			tag = "b"
-		}
-		return "<" + tag + ">" + renderInlines(v, src) + "</" + tag + ">"
-	case *ast.CodeSpan:
-		return "<code>" + html.EscapeString(string(v.Text(src))) + "</code>"
-	case *ast.Link:
-		href := html.EscapeString(string(v.Destination))
-		label := renderInlines(v, src)
-		if strings.TrimSpace(label) == "" {
-			label = href
-		}
-		return `<a href="` + href + `">` + label + "</a>"
-	default:
-		if n.FirstChild() != nil {
-			return renderInlines(n, src)
-		}
-		return html.EscapeString(string(n.Text(src)))
+func (t *Tg) SendPhoto(chatID int64, image []byte, caption string) error {
+	photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileReader{
+		Name:   "poster.png",
+		Reader: bytes.NewReader(image),
+	})
+	if caption != "" {
+		photo.Caption = caption
+		photo.ParseMode = tgbotapi.ModeHTML
 	}
-}
-
-func normalizeNewlines(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	return strings.ReplaceAll(s, "\r", "\n")
-}
-
-func runeLen(s string) int {
-	return utf8.RuneCountInString(s)
-}
-
-func splitByRunes(s string, maxLen int) []string {
-	if maxLen <= 0 {
-		return []string{s}
+	_, err := t.bot.Send(photo)
+	if err != nil {
+		return fmt.Errorf("send telegram photo: %w", err)
 	}
 
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return []string{s}
-	}
-
-	parts := make([]string, 0, len(runes)/maxLen+1)
-	for start := 0; start < len(runes); start += maxLen {
-		end := start + maxLen
-		if end > len(runes) {
-			end = len(runes)
-		}
-		parts = append(parts, string(runes[start:end]))
-	}
-
-	return parts
+	return nil
 }

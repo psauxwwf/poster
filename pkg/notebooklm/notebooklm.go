@@ -6,8 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"poster/pkg/cmd"
 )
@@ -54,6 +58,11 @@ type Artifact struct {
 
 type NotebookLM struct {
 	bin string
+}
+
+type YouTubePipelineOutput struct {
+	Image  []byte
+	Report []byte
 }
 
 func New(binary string) (*NotebookLM, error) {
@@ -324,8 +333,122 @@ func (n *NotebookLM) DownloadInfographic(ctx context.Context, notebookID, artifa
 	return nil
 }
 
-func (n *NotebookLM) Run(ctx context.Context, args ...string) (string, string, error) {
-	return n.run(ctx, args...)
+func (n *NotebookLM) RunYouTubePipeline(
+	ctx context.Context,
+	url,
+	outDir string,
+	timeoutSource,
+	timeoutArtifact time.Duration,
+	reportPrompt,
+	infographicStyle string,
+) (YouTubePipelineOutput, error) {
+	if strings.TrimSpace(url) == "" {
+		return YouTubePipelineOutput{}, fmt.Errorf("empty url")
+	}
+
+	if err := n.Status(ctx); err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("notebooklm is not ready: %w; run `notebooklm login`", err)
+	}
+
+	notebookName := fmt.Sprintf("yt-import-%s", time.Now().UTC().Format("20060102-150405"))
+	notebook, err := n.CreateNotebook(ctx, notebookName)
+	if err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("create notebook: %w", err)
+	}
+	slog.Info("notebook created", "notebook_id", notebook.ID)
+
+	source, err := n.AddSource(ctx, notebook.ID, url)
+	if err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("add source: %w", err)
+	}
+	slog.Info("source added", "source_id", source.ID)
+
+	if err := n.WaitSource(
+		ctx,
+		notebook.ID,
+		source.ID,
+		timeoutSource,
+	); err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("source wait failed: %w; manual retry: notebooklm source wait %s -n %s --timeout %d", err, source.ID, notebook.ID, int(timeoutSource.Seconds()))
+	}
+
+	reportArtifact, err := n.GenerateReport(ctx, notebook.ID, "blog-post", reportPrompt)
+	if err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("generate report: %w", err)
+	}
+	infographicArtifact, err := n.GenerateInfographic(
+		ctx,
+		notebook.ID,
+		"detailed",
+		"sketch-note",
+		infographicStyle,
+	)
+	if err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("generate infographic: %w", err)
+	}
+
+	if err := n.WaitArtifact(
+		ctx,
+		notebook.ID,
+		reportArtifact.ID,
+		timeoutArtifact,
+	); err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("report wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, reportArtifact.ID, notebook.ID, int(timeoutArtifact.Seconds()))
+	}
+	slog.Info("report artifact created", "report_artifact_id", reportArtifact.ID)
+
+	if err := n.WaitArtifact(
+		ctx,
+		notebook.ID,
+		infographicArtifact.ID,
+		timeoutArtifact,
+	); err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("infographic wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, infographicArtifact.ID, notebook.ID, int(timeoutArtifact.Seconds()))
+	}
+	slog.Info("infographic artifact created", "infographic_artifact_id", infographicArtifact.ID)
+
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("create output dir: %w", err)
+	}
+
+	baseName := sanitizeTitle(source.Title, 100, notebook.ID)
+
+	reportPath, err := uniquePath(outDir, baseName, ".md")
+	if err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("pick report path: %w", err)
+	}
+
+	infographicPath, err := uniquePath(outDir, baseName, ".png")
+	if err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("pick infographic path: %w", err)
+	}
+
+	if err := n.DownloadReport(ctx, notebook.ID, reportArtifact.ID, reportPath); err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("download report: %w", err)
+	}
+
+	if err := n.DownloadInfographic(ctx, notebook.ID, infographicArtifact.ID, infographicPath); err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("download infographic: %w", err)
+	}
+
+	if err := n.RenameNotebook(ctx, notebook.ID, baseName); err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("rename notebook: %w", err)
+	}
+
+	report, err := os.ReadFile(reportPath)
+	if err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("open report md: %w", err)
+	}
+
+	image, err := os.ReadFile(infographicPath)
+	if err != nil {
+		return YouTubePipelineOutput{}, fmt.Errorf("open infographic png: %w", err)
+	}
+
+	return YouTubePipelineOutput{
+		Image:  image,
+		Report: report,
+	}, nil
 }
 
 func (n *NotebookLM) runJSON(ctx context.Context, args ...string) (map[string]any, []byte, error) {
@@ -361,4 +484,67 @@ func (n *NotebookLM) run(ctx context.Context, args ...string) (string, string, e
 	slog.Debug("notebooklm command response", "command", command, "stdout", stdoutText, "stderr", stderrText)
 
 	return stdoutText, stderrText, nil
+}
+
+var (
+	forbiddenChars = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1F]`)
+	spaces         = regexp.MustCompile(`\s+`)
+)
+
+func sanitizeTitle(input string, maxLen int, fallback string) string {
+	name := strings.TrimSpace(input)
+	name = forbiddenChars.ReplaceAllString(name, "")
+	name = spaces.ReplaceAllString(name, " ")
+	name = strings.Trim(name, " .")
+
+	if maxLen > 0 && utf8.RuneCountInString(name) > maxLen {
+		runes := []rune(name)
+		name = string(runes[:maxLen])
+		name = strings.Trim(name, " .")
+	}
+
+	if name == "" {
+		name = strings.TrimSpace(fallback)
+	}
+	if name == "" {
+		name = "youtube"
+	}
+
+	return name
+}
+
+func uniquePath(dir, baseName, ext string) (string, error) {
+	if ext != "" && !strings.HasPrefix(ext, ".") {
+		ext = "." + ext
+	}
+
+	first := filepath.Join(dir, baseName+ext)
+	if ok, err := exists(first); err != nil {
+		return "", err
+	} else if !ok {
+		return first, nil
+	}
+
+	for idx := 2; ; idx++ {
+		candidate := filepath.Join(dir, fmt.Sprintf("%s-%d%s", baseName, idx, ext))
+		ok, err := exists(candidate)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return candidate, nil
+		}
+	}
+}
+
+func exists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+
+	return false, err
 }
