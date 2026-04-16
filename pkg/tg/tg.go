@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 
@@ -87,9 +88,14 @@ func (t *Tg) Run(ctx context.Context, adminID int64, onYT func(chatID int64, url
 					return err
 				}
 			case "yt":
-				if err := t.handleYT(update.Message.Chat.ID, update.Message.CommandArguments(), onYT); err != nil {
-					return err
-				}
+				chatID := update.Message.Chat.ID
+				args := update.Message.CommandArguments()
+
+				go func() {
+					if err := t.handleYT(chatID, args, onYT); err != nil {
+						slog.Error("handle /yt failed", "chat_id", chatID, "error", err)
+					}
+				}()
 			default:
 				if err := t.SendText(update.Message.Chat.ID, "Unknown command. Use /yt <youtube-url>"); err != nil {
 					return err

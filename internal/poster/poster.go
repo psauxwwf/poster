@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	infographicStyle = "Design a retro-futuristic Fallout-inspired infographic: 1950s atomic-age poster aesthetic, Vault-Tec style iconography, worn paper texture, muted olive and amber palette, bold block headings, simple technical callouts, and optimistic-but-cautionary tone. Keep all text highly readable and preserve factual accuracy from the source."
-	reportPrompt     = "Write a concise blog post in Markdown. If the source video is short (under 10 minutes), keep the post around 1024 characters; if it is longer, no strict length limit. Use expressive formatting and emojis where appropriate. Emphasize code examples often and include rich Markdown constructs that convert well to Telegram HTML: italic, underline, strikethrough, spoiler, links, inline monospace code, fenced code blocks, language-tagged code blocks, blockquotes, and collapsible quotes. Keep facts accurate and tied to the source."
+	infographicStyle = "Design a retro-futuristic Fallout-inspired infographic: 1950s atomic-age poster aesthetic, worn paper texture, muted olive and amber palette, bold block headings, simple technical callouts, and optimistic-but-cautionary tone. Prefer using a generic smiling retro mascot inspired by Vault Boy in the imagery. Do not mention VAULT-TEC anywhere in the text or labels. Keep all text highly readable and preserve factual accuracy from the source."
+	reportPrompt     = "Write a concise blog post in Markdown. If the source video is short (under 10 minutes), keep the post around 1024 characters; if it is longer, no strict length limit. Use expressive formatting and emojis where appropriate. Use only the following Markdown formatting: italic, underline, strikethrough, inline monospace code, fenced code blocks, language-tagged code blocks, blockquotes, and collapsible quotes. Do not include links to any third-party resources. Keep facts accurate and tied to the source."
 )
 
 type Poster struct {

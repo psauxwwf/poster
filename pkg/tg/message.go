@@ -90,12 +90,37 @@ func MarkdownToTelegramHTMLCaptionAndChunks(md []byte, captionMaxLen, messageMax
 		return "", nil
 	}
 
-	parts := splitByRuneLimits(htmlText, captionMaxLen, messageMaxLen)
-	if len(parts) == 0 {
+	blocks := splitNonEmptyBlocks(htmlText)
+	if len(blocks) == 0 {
 		return "", nil
 	}
 
-	return parts[0], parts[1:]
+	captionBlocks := make([]string, 0, len(blocks))
+	captionLen := 0
+	nextBlock := 0
+
+	for i, block := range blocks {
+		addLen := runeLen(block)
+		if len(captionBlocks) > 0 {
+			addLen += 2
+		}
+
+		if captionLen+addLen > captionMaxLen {
+			break
+		}
+
+		captionBlocks = append(captionBlocks, block)
+		captionLen += addLen
+		nextBlock = i + 1
+	}
+
+	caption := strings.Join(captionBlocks, "\n\n")
+	if nextBlock >= len(blocks) {
+		return caption, nil
+	}
+
+	chunks := joinBlocksToChunks(blocks[nextBlock:], messageMaxLen)
+	return caption, chunks
 }
 
 func renderBlock(n ast.Node, src []byte) string {
@@ -257,29 +282,58 @@ func splitByRunes(s string, maxLen int) []string {
 	return parts
 }
 
-func splitByRuneLimits(s string, firstMaxLen, nextMaxLen int) []string {
-	runes := []rune(s)
-	if len(runes) == 0 {
-		return nil
+func splitNonEmptyBlocks(s string) []string {
+	raw := strings.Split(s, "\n\n")
+	blocks := make([]string, 0, len(raw))
+
+	for _, block := range raw {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+		blocks = append(blocks, block)
 	}
 
-	if firstMaxLen <= 0 {
-		firstMaxLen = telegramMessageLimit
-	}
-	if nextMaxLen <= 0 {
-		nextMaxLen = telegramMessageLimit
-	}
+	return blocks
+}
 
-	parts := make([]string, 0, len(runes)/nextMaxLen+2)
-	start := 0
-	maxLen := firstMaxLen
-
-	for start < len(runes) {
-		end := min(start+maxLen, len(runes))
-		parts = append(parts, string(runes[start:end]))
-		start = end
-		maxLen = nextMaxLen
+func joinBlocksToChunks(blocks []string, maxLen int) []string {
+	if maxLen <= 0 {
+		maxLen = telegramMessageLimit
 	}
 
-	return parts
+	chunks := make([]string, 0, 4)
+	cur := ""
+
+	for _, block := range blocks {
+		if cur == "" {
+			if runeLen(block) <= maxLen {
+				cur = block
+				continue
+			}
+
+			chunks = append(chunks, splitByRunes(block, maxLen)...)
+			continue
+		}
+
+		if runeLen(cur)+2+runeLen(block) <= maxLen {
+			cur += "\n\n" + block
+			continue
+		}
+
+		chunks = append(chunks, cur)
+		if runeLen(block) <= maxLen {
+			cur = block
+			continue
+		}
+
+		chunks = append(chunks, splitByRunes(block, maxLen)...)
+		cur = ""
+	}
+
+	if cur != "" {
+		chunks = append(chunks, cur)
+	}
+
+	return chunks
 }

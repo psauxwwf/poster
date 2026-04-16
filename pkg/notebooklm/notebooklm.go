@@ -372,10 +372,18 @@ func (n *NotebookLM) RunYouTubePipeline(
 		return YouTubePipelineOutput{}, fmt.Errorf("source wait failed: %w; manual retry: notebooklm source wait %s -n %s --timeout %d", err, source.ID, notebook.ID, int(timeoutSource.Seconds()))
 	}
 
-	reportArtifact, err := n.GenerateReport(ctx, notebook.ID, "blog-post", reportPrompt)
+	reportArtifact, err := n.GenerateReport(
+		ctx,
+		notebook.ID,
+		// "blog-post",
+		"custom",
+		reportPrompt,
+	)
 	if err != nil {
 		return YouTubePipelineOutput{}, fmt.Errorf("generate report: %w", err)
 	}
+	slog.Info("report start creating", "report_artifact_id", reportArtifact.ID)
+
 	infographicArtifact, err := n.GenerateInfographic(
 		ctx,
 		notebook.ID,
@@ -386,6 +394,7 @@ func (n *NotebookLM) RunYouTubePipeline(
 	if err != nil {
 		return YouTubePipelineOutput{}, fmt.Errorf("generate infographic: %w", err)
 	}
+	slog.Info("infographic start creating", "infographic_artifact_id", infographicArtifact.ID)
 
 	if err := n.WaitArtifact(
 		ctx,
@@ -395,7 +404,7 @@ func (n *NotebookLM) RunYouTubePipeline(
 	); err != nil {
 		return YouTubePipelineOutput{}, fmt.Errorf("report wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, reportArtifact.ID, notebook.ID, int(timeoutArtifact.Seconds()))
 	}
-	slog.Info("report artifact created", "report_artifact_id", reportArtifact.ID)
+	slog.Info("report artifact waited", "report_artifact_id", reportArtifact.ID)
 
 	if err := n.WaitArtifact(
 		ctx,
@@ -405,7 +414,7 @@ func (n *NotebookLM) RunYouTubePipeline(
 	); err != nil {
 		return YouTubePipelineOutput{}, fmt.Errorf("infographic wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, infographicArtifact.ID, notebook.ID, int(timeoutArtifact.Seconds()))
 	}
-	slog.Info("infographic artifact created", "infographic_artifact_id", infographicArtifact.ID)
+	slog.Info("infographic artifact waited", "infographic_artifact_id", infographicArtifact.ID)
 
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return YouTubePipelineOutput{}, fmt.Errorf("create output dir: %w", err)

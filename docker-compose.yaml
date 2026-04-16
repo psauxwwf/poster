@@ -9,12 +9,10 @@ services:
     stop_grace_period: 20s
     volumes:
       - ~/.notebooklm:/root/.notebooklm
+      - ./dist:/poster/dist
     network_mode: "host"
     environment:
-      TELEGRAM_BOT_TOKEN: ""
-      TELEGRAM_ADMIN_ID: ""
-    env_file:
-      - .env
-    # command:
-    #   - sleep
-    #   - infinity
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ADMIN_ID: ${TELEGRAM_ADMIN_ID}
+    # env_file:
+    #   - .env

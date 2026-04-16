@@ -81,7 +81,7 @@ func main() {
 				mode = poster.ModeServe
 			}
 
-			runMain := func() error {
+			_main := func() error {
 				_poster, err := poster.New(outDir, timeoutSource, timeoutArtifact, notebookLMBin)
 				if err != nil {
 					slog.Error("poster init failed", "error", err)
@@ -98,11 +98,11 @@ func main() {
 			}
 
 			if mode != poster.ModeServe {
-				return runMain()
+				return _main()
 			}
 
 			for {
-				if err := runMain(); err != nil {
+				if err := _main(); err != nil {
 					slog.Error("serve loop failed, restarting", "error", err, "retry_in", "3s")
 					time.Sleep(3 * time.Second)
 					continue
