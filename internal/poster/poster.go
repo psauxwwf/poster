@@ -16,8 +16,54 @@ import (
 )
 
 const (
-	infographicStyle = "Design a retro-futuristic Fallout-inspired infographic: 1950s atomic-age poster aesthetic, worn paper texture, muted olive and amber palette, bold block headings, simple technical callouts, and optimistic-but-cautionary tone. Prefer using a generic smiling retro mascot inspired by Vault Boy in the imagery. Do not mention VAULT-TEC anywhere in the text or labels. Keep all text highly readable and preserve factual accuracy from the source."
-	reportPrompt     = "Write a concise blog post in Markdown. If the source video is short (under 10 minutes), keep the post around 1024 characters; if it is longer, no strict length limit. Use expressive formatting and emojis where appropriate. Use only the following Markdown formatting: italic, underline, strikethrough, inline monospace code, fenced code blocks, language-tagged code blocks, blockquotes, and collapsible quotes. Do not include links to any third-party resources. Keep facts accurate and tied to the source."
+	infographicStyle = `TASK:
+Create one infographic image based on the source content.
+
+VISUAL STYLE:
+- Retro-futuristic, Fallout-inspired visual language
+- 1950s poster look, worn paper texture
+- Muted olive and amber palette
+- Bold block headings and simple technical callouts
+- Optimistic-but-cautionary mood
+- Prefer a generic smiling retro mascot inspired by Vault Boy
+
+TEXT RULES:
+- Apply Fallout references only to visuals, not wording
+- Text must match the source article and stay neutral
+- Do not use franchise-like words such as "atomic", "vault", or similar
+- Never mention "VAULT-TEC" in text or labels
+- Keep all text highly readable and factually accurate`
+
+	reportPrompt = `TASK:
+Write a concise blog post in Markdown based on the source content.
+
+LENGTH:
+- If source video is under 10 minutes: target about 1024 characters
+- If source video is 10+ minutes: no strict length limit
+
+STYLE:
+- Keep tone expressive and clear
+- Emojis are allowed when appropriate
+- Keep facts accurate and tied to the source
+- Prefer dry, factual, and concise delivery over emotional wording
+- If the source contains command examples or other concrete examples, include as many of them as relevant
+- Do not invent your own examples
+
+ALLOWED MARKDOWN ONLY:
+- italic
+- underline
+- strikethrough
+- inline monospace code
+- fenced code blocks
+- language-tagged code blocks
+- blockquotes
+- collapsible quotes
+
+RESTRICTIONS:
+- Do not include links to any third-party resources
+- Do not use raw HTML tags like <u>
+- Do not use callout syntax like [!QUOTE]
+- Do not ask for likes, subscriptions, comments, or other engagement actions`
 )
 
 type Poster struct {

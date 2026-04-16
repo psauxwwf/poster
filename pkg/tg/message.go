@@ -8,6 +8,8 @@ import (
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	extast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
 )
 
@@ -15,7 +17,10 @@ const telegramMessageLimit = 4096
 
 func MarkdownToTelegramHTML(md []byte) []byte {
 	src := []byte(toLines(string(md)))
-	doc := goldmark.DefaultParser().Parse(text.NewReader(src))
+	mdParser := goldmark.New(
+		goldmark.WithExtensions(extension.Strikethrough),
+	)
+	doc := mdParser.Parser().Parse(text.NewReader(src))
 
 	blocks := make([]string, 0, doc.ChildCount())
 	for n := doc.FirstChild(); n != nil; n = n.NextSibling() {
@@ -237,6 +242,8 @@ func renderInline(n ast.Node, src []byte) string {
 			tag = "b"
 		}
 		return "<" + tag + ">" + renderInlines(v, src) + "</" + tag + ">"
+	case *extast.Strikethrough:
+		return "<s>" + renderInlines(v, src) + "</s>"
 	case *ast.CodeSpan:
 		return "<code>" + html.EscapeString(string(v.Text(src))) + "</code>"
 	case *ast.Link:
