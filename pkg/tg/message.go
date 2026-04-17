@@ -237,11 +237,19 @@ func renderInline(n ast.Node, src []byte) string {
 	case *ast.String:
 		return html.EscapeString(string(v.Value))
 	case *ast.Emphasis:
-		tag := "i"
-		if v.Level == 2 {
-			tag = "b"
+		content := renderInlines(v, src)
+		if v.Level <= 0 {
+			return content
 		}
-		return "<" + tag + ">" + renderInlines(v, src) + "</" + tag + ">"
+
+		for i := 0; i < v.Level/2; i++ {
+			content = "<b>" + content + "</b>"
+		}
+		if v.Level%2 != 0 {
+			content = "<i>" + content + "</i>"
+		}
+
+		return content
 	case *extast.Strikethrough:
 		return "<s>" + renderInlines(v, src) + "</s>"
 	case *ast.CodeSpan:

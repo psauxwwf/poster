@@ -388,6 +388,7 @@ func (n *NotebookLM) RunYouTubePipeline(
 		ctx,
 		notebook.ID,
 		"detailed",
+		// "standard",
 		"sketch-note",
 		infographicStyle,
 	)

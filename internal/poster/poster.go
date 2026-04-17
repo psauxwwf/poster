@@ -46,6 +46,7 @@ STYLE:
 - Emojis are allowed when appropriate
 - Keep facts accurate and tied to the source
 - Prefer dry, factual, and concise delivery over emotional wording
+- Use italic emphasis at least once where it improves readability
 - If the source contains command examples or other concrete examples, include as many of them as relevant
 - Do not invent your own examples
 
