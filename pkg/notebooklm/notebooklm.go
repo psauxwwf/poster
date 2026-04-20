@@ -123,21 +123,10 @@ func (n *NotebookLM) ListNotebookIDs(ctx context.Context) ([]string, error) {
 }
 
 func (n *NotebookLM) DeleteNotebook(ctx context.Context, notebookID string) error {
-	attempts := [][]string{
-		{"delete", "-n", notebookID, "-y"},
-		{"delete", "--notebook", notebookID, "--yes"},
+	if _, _, err := n.run(ctx, "delete", "--notebook", notebookID, "--yes"); err != nil {
+		return err
 	}
-
-	var errs []error
-	for _, args := range attempts {
-		_, _, err := n.run(ctx, args...)
-		if err == nil {
-			return nil
-		}
-		errs = append(errs, err)
-	}
-
-	return errors.Join(errs...)
+	return nil
 }
 
 func (n *NotebookLM) CreateNotebook(ctx context.Context, title string) (Notebook, error) {
@@ -209,7 +198,7 @@ func (n *NotebookLM) WaitSource(ctx context.Context, notebookID, sourceID string
 		seconds = 1
 	}
 
-	if _, _, err := n.run(ctx, "source", "wait", sourceID, "-n", notebookID, "--timeout", fmt.Sprintf("%d", seconds)); err != nil {
+	if _, _, err := n.runWithRetry(ctx, "source", "wait", sourceID, "-n", notebookID, "--timeout", fmt.Sprintf("%d", seconds)); err != nil {
 		return fmt.Errorf("source wait failed: %w", err)
 	}
 
@@ -309,7 +298,7 @@ func (n *NotebookLM) WaitArtifact(ctx context.Context, notebookID, artifactID st
 		seconds = 1
 	}
 
-	_, _, err := n.run(ctx, "artifact", "wait", artifactID, "-n", notebookID, "--timeout", fmt.Sprintf("%d", seconds))
+	_, _, err := n.runWithRetry(ctx, "artifact", "wait", artifactID, "-n", notebookID, "--timeout", fmt.Sprintf("%d", seconds))
 	if err != nil {
 		return fmt.Errorf("artifact wait failed: %w", err)
 	}
@@ -318,7 +307,7 @@ func (n *NotebookLM) WaitArtifact(ctx context.Context, notebookID, artifactID st
 }
 
 func (n *NotebookLM) DownloadReport(ctx context.Context, notebookID, artifactID, outputPath string) error {
-	if _, _, err := n.run(ctx, "download", "report", outputPath, "-a", artifactID, "-n", notebookID); err != nil {
+	if _, _, err := n.runWithRetry(ctx, "download", "report", outputPath, "-a", artifactID, "-n", notebookID); err != nil {
 		return err
 	}
 
@@ -326,11 +315,70 @@ func (n *NotebookLM) DownloadReport(ctx context.Context, notebookID, artifactID,
 }
 
 func (n *NotebookLM) DownloadInfographic(ctx context.Context, notebookID, artifactID, outputPath string) error {
-	if _, _, err := n.run(ctx, "download", "infographic", outputPath, "-a", artifactID, "-n", notebookID); err != nil {
+	if _, _, err := n.runWithRetry(ctx, "download", "infographic", outputPath, "-a", artifactID, "-n", notebookID); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func (n *NotebookLM) runWithRetry(ctx context.Context, args ...string) (string, string, error) {
+	const maxAttempts = 6
+
+	delay := 2 * time.Second
+	command := n.bin + " " + strings.Join(args, " ")
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		stdout, stderr, err := n.run(ctx, args...)
+		if err == nil {
+			return stdout, stderr, nil
+		}
+
+		if !isRetryableNotebookLMError(err) || attempt == maxAttempts {
+			return stdout, stderr, err
+		}
+
+		slog.Warn(
+			"notebooklm temporary failure, retrying command",
+			"command", command,
+			"attempt", attempt,
+			"max_attempts", maxAttempts,
+			"retry_in", delay,
+			"error", err,
+		)
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", "", fmt.Errorf("command `%s` interrupted: %w", command, ctx.Err())
+		case <-timer.C:
+		}
+
+		if delay < 10*time.Second {
+			delay *= 2
+			if delay > 10*time.Second {
+				delay = 10 * time.Second
+			}
+		}
+	}
+
+	return "", "", fmt.Errorf("command `%s` failed after retries", command)
+}
+
+func isRetryableNotebookLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "http 502") ||
+		strings.Contains(msg, "http 503") ||
+		strings.Contains(msg, "http 504") ||
+		strings.Contains(msg, "temporarily unavailable") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "eof")
 }
 
 func (n *NotebookLM) RunYouTubePipeline(
