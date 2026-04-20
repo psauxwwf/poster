@@ -10,6 +10,9 @@ vars:
   bin: "{{.PWD}}/bin"
   app: "poster"
   app_bin: "{{.bin}}/{{.app}}"
+  repo_name:
+    sh: basename "{{.PWD}}"
+  release_linux_archive: "{{.bin}}/{{.repo_name}}_linux_amd64.tar.gz"
 
 env:
   COMPOSE_BAKE: true
@@ -40,6 +43,22 @@ tasks:
         -o {{.app_bin}} cmd/{{.app}}/main.go
       - strip {{.app_bin}}
       - objcopy --strip-unneeded {{.app_bin}}
+
+  release:
+    desc: build and publish github release
+    deps:
+      - build
+    cmds:
+      - tar -czf {{.release_linux_archive}} -C {{.bin}} {{.app}}
+      - |
+        TAG=$(date +v%m.%d.%H)
+        gh release create "$TAG" {{.release_linux_archive}}
+
+  package:
+    desc: build and push docker image
+    cmds:
+      - docker compose -f docker-compose.yaml build
+      - docker compose -f docker-compose.yaml push
 
   docker:up:
     desc: build binaries and start app containers
