@@ -22,6 +22,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C.UTF-8 \
     TZ=UTC \
     UV_INSTALL_DIR=/usr/local/bin \
+    PLAYWRIGHT_BROWSERS_PATH=/playwright \
     PATH="/poster:/poster/.venv/bin:${PATH}"
 
 WORKDIR /poster
@@ -34,8 +35,10 @@ RUN apt-get update && \
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock .python-version ./
 RUN uv sync --no-cache
+RUN playwright install chromium && \
+    rm -rf /root/.cache/* /tmp/* /var/tmp/*
 
 COPY --from=builder /src/bin/poster ./poster
 

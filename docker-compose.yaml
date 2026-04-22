@@ -15,17 +15,17 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_ADMIN_ID: ${TELEGRAM_ADMIN_ID}
 
-  watchtower:
-    image: containrrr/watchtower
-    container_name: watchtower
-    restart: unless-stopped
-    environment:
-      WATCHTOWER_CLEANUP: "true"
-      WATCHTOWER_POLL_INTERVAL: "300"
-      WATCHTOWER_INCLUDE_STOPPED: "true"
-      WATCHTOWER_TRACE: "true"
-      WATCHTOWER_REGISTRY_AUTH: "true"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ~/.docker/config.json:/config.json:ro
-    command: --debug poster
+  # watchtower:
+  #   image: containrrr/watchtower
+  #   container_name: watchtower
+  #   restart: unless-stopped
+  #   environment:
+  #     WATCHTOWER_CLEANUP: "true"
+  #     WATCHTOWER_POLL_INTERVAL: "300"
+  #     WATCHTOWER_INCLUDE_STOPPED: "true"
+  #     WATCHTOWER_TRACE: "true"
+  #     WATCHTOWER_REGISTRY_AUTH: "true"
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - ~/.docker/config.json:/config.json:ro
+  #   command: --debug poster
