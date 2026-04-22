@@ -435,8 +435,8 @@ func (n *NotebookLM) RunYouTubePipeline(
 	infographicArtifact, err := n.GenerateInfographic(
 		ctx,
 		notebook.ID,
-		"detailed",
-		// "standard",
+		// "detailed",
+		"standard",
 		"sketch-note",
 		infographicStyle,
 	)

@@ -19,7 +19,7 @@ type Tg struct {
 
 var botCommands = []tgbotapi.BotCommand{
 	{Command: "start", Description: "show available commands"},
-	{Command: "yt", Description: "run pipeline for YouTube URL"},
+	{Command: "run", Description: "launch a pipeline for incoming sources"},
 }
 
 const telegramPhotoCaptionLimit = 1024
@@ -87,17 +87,17 @@ func (t *Tg) Run(ctx context.Context, adminID int64, onYT func(chatID int64, url
 				if err := t.SendText(update.Message.Chat.ID, t.availableCommandsText()); err != nil {
 					return err
 				}
-			case "yt":
+			case "run":
 				chatID := update.Message.Chat.ID
 				args := update.Message.CommandArguments()
 
 				go func() {
 					if err := t.handleYT(chatID, args, onYT); err != nil {
-						slog.Error("handle /yt failed", "chat_id", chatID, "error", err)
+						slog.Error("handle /run failed", "chat_id", chatID, "error", err)
 					}
 				}()
 			default:
-				if err := t.SendText(update.Message.Chat.ID, "Unknown command. Use /yt <youtube-url>"); err != nil {
+				if err := t.SendText(update.Message.Chat.ID, "Unknown command. Use /run <source-url>"); err != nil {
 					return err
 				}
 			}
@@ -118,7 +118,7 @@ func (t *Tg) availableCommandsText() string {
 func (t *Tg) handleYT(chatID int64, args string, onYT func(chatID int64, url string) ([]byte, []byte, error)) error {
 	url := t.youtube.FindString(strings.TrimSpace(args))
 	if url == "" {
-		return t.SendText(chatID, "Usage: /yt <youtube-url>")
+		return t.SendText(chatID, "Usage: /run <source-url>")
 	}
 
 	if err := t.SendText(chatID, "Accepted, processing..."); err != nil {

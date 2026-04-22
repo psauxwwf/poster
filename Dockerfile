@@ -37,8 +37,8 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 COPY pyproject.toml uv.lock .python-version ./
 RUN uv sync --no-cache
-RUN playwright install chromium && \
-    rm -rf /root/.cache/* /tmp/* /var/tmp/*
+# RUN playwright install chromium && \
+#     rm -rf /root/.cache/* /tmp/* /var/tmp/*
 
 COPY --from=builder /src/bin/poster ./poster
 

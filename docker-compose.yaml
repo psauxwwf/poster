@@ -10,7 +10,8 @@ services:
     volumes:
       - ~/.notebooklm:/root/.notebooklm
       - ./dist:/poster/dist
-    network_mode: "host"
+    networks:
+      - poster
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_ADMIN_ID: ${TELEGRAM_ADMIN_ID}
@@ -29,3 +30,15 @@ services:
   #     - /var/run/docker.sock:/var/run/docker.sock
   #     - ~/.docker/config.json:/config.json:ro
   #   command: --debug poster
+  #   networks:
+  #     - poster
+
+networks:
+  poster:
+    name: poster
+    driver: bridge
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: 172.22.100.0/24
+          gateway: 172.22.100.1
