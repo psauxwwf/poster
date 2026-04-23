@@ -51,7 +51,7 @@ func (t *Tg) RegisterCommands() error {
 	return nil
 }
 
-func (t *Tg) Run(ctx context.Context, adminID int64, f func(int64, string) ([]byte, []byte, error)) error {
+func (t *Tg) Run(ctx context.Context, adminID int64, f func(int64, []string) ([]byte, []byte, error)) error {
 	if f == nil {
 		return fmt.Errorf("handler is nil")
 	}
@@ -117,9 +117,9 @@ func (t *Tg) availableCommandsText() string {
 	return strings.Join(lines, "\n")
 }
 
-func (t *Tg) handleRun(chatID int64, args string, onRun func(chatID int64, url string) ([]byte, []byte, error)) error {
-	url := t.reurl.FindString(strings.TrimSpace(args))
-	if url == "" {
+func (t *Tg) handleRun(chatID int64, args string, onRun func(chatID int64, urls []string) ([]byte, []byte, error)) error {
+	urls := t.reurl.FindAllString(strings.TrimSpace(args), -1)
+	if len(urls) == 0 {
 		return t.SendText(chatID, "Usage: /run <source-url>")
 	}
 
@@ -127,7 +127,7 @@ func (t *Tg) handleRun(chatID int64, args string, onRun func(chatID int64, url s
 		return err
 	}
 
-	image, report, err := onRun(chatID, url)
+	image, report, err := onRun(chatID, urls)
 	if err != nil {
 		return t.SendText(chatID, fmt.Sprintf("Failed: %v", err))
 	}

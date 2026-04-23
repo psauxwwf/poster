@@ -16,6 +16,10 @@ import (
 	"poster/pkg/cmd"
 )
 
+const (
+	titlePrompt = "Come up with a title for this note, it should be short and succinct, no more than 10 words. Answer with just the title, no formatting or extra information."
+)
+
 type createNotebookResponse struct {
 	Notebook struct {
 		ID string `json:"id"`
@@ -36,6 +40,10 @@ type listSourcesResponse struct {
 type generateArtifactResponse struct {
 	TaskID string `json:"task_id"`
 	Status string `json:"status"`
+}
+
+type askResponse struct {
+	Answer string `json:"answer"`
 }
 
 type listNotebooksResponse struct {
@@ -62,7 +70,10 @@ type Artifact struct {
 }
 
 type NotebookLM struct {
-	bin string
+	bin             string
+	outDir          string
+	timeoutSource   time.Duration
+	timeoutArtifact time.Duration
 }
 
 type PipelineOutput struct {
@@ -70,14 +81,26 @@ type PipelineOutput struct {
 	Report []byte
 }
 
-func New(binary string) (*NotebookLM, error) {
-	if strings.TrimSpace(binary) == "" {
-		binary = "notebooklm"
+func New(
+	_bin, _outDir string,
+	_timeoutSource, _timeoutArtifact time.Duration,
+) (*NotebookLM, error) {
+	if strings.TrimSpace(_bin) == "" {
+		_bin = "notebooklm"
 	}
 
-	n := &NotebookLM{bin: binary}
+	n := &NotebookLM{
+		bin:             _bin,
+		outDir:          _outDir,
+		timeoutSource:   _timeoutSource,
+		timeoutArtifact: _timeoutArtifact,
+	}
 	if _, _, err := n.run(context.Background(), "language", "set", "ru"); err != nil {
 		return nil, fmt.Errorf("set notebooklm language: %w", err)
+	}
+
+	if err := os.MkdirAll(_outDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create output dir: %w", err)
 	}
 
 	return n, nil
@@ -153,12 +176,44 @@ func (n *NotebookLM) CreateNotebook(ctx context.Context, title string) (Notebook
 	return Notebook{ID: notebookID, Raw: resp}, nil
 }
 
-func (n *NotebookLM) RenameNotebook(ctx context.Context, notebookID, newTitle string) error {
-	if _, _, err := n.run(ctx, "rename", "--notebook", notebookID, newTitle); err != nil {
-		return err
+func (n *NotebookLM) RenameNotebook(ctx context.Context, notebookID string, title ...string) (string, error) {
+	if len(title) == 0 {
+		_title, err := n.Ask(ctx, notebookID, titlePrompt)
+		if err != nil {
+			return "", fmt.Errorf("generate notebook title: %w", err)
+		}
+		title = append(title, _title)
 	}
 
-	return nil
+	renamed := strings.TrimSpace(title[0])
+	if renamed == "" {
+		return "", fmt.Errorf("empty notebook title")
+	}
+
+	if _, _, err := n.run(ctx, "rename", "--notebook", notebookID, renamed); err != nil {
+		return "", err
+	}
+
+	return renamed, nil
+}
+
+func (n *NotebookLM) Ask(ctx context.Context, notebookID string, prompt string) (string, error) {
+	_, raw, err := n.runJSON(ctx, "ask", "--notebook", notebookID, "--json", prompt)
+	if err != nil {
+		return "", err
+	}
+
+	var parsed askResponse
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", fmt.Errorf("parse ask response: %w", err)
+	}
+
+	answer := strings.TrimSpace(parsed.Answer)
+	if answer == "" {
+		return "", fmt.Errorf("empty ask answer")
+	}
+
+	return answer, nil
 }
 
 func (n *NotebookLM) ListSources(ctx context.Context, notebookID string) ([]Source, error) {
@@ -318,6 +373,26 @@ func (n *NotebookLM) DownloadReport(ctx context.Context, notebookID, artifactID,
 		return err
 	}
 
+	sources, err := n.ListSources(ctx, notebookID)
+	if err != nil {
+		return fmt.Errorf("get sources: %w", err)
+	}
+
+	links := sources2links(sources)
+	if len(links) == 0 {
+		return nil
+	}
+
+	f, err := os.OpenFile(outputPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("open report for append: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.Write(links); err != nil {
+		return fmt.Errorf("append source links to report: %w", err)
+	}
+
 	return nil
 }
 
@@ -390,15 +465,21 @@ func isRetryableNotebookLMError(err error) bool {
 
 func (n *NotebookLM) Run(
 	ctx context.Context,
-	url,
-	outDir string,
-	timeoutSource,
-	timeoutArtifact time.Duration,
+	urls []string,
 	reportPrompt,
 	infographicStyle string,
 ) (PipelineOutput, error) {
-	if strings.TrimSpace(url) == "" {
-		return PipelineOutput{}, fmt.Errorf("empty url")
+	cleanURLs := make([]string, 0, len(urls))
+	for _, url := range urls {
+		url = strings.TrimSpace(url)
+		if url == "" {
+			continue
+		}
+		cleanURLs = append(cleanURLs, url)
+	}
+
+	if len(cleanURLs) == 0 {
+		return PipelineOutput{}, fmt.Errorf("empty urls")
 	}
 
 	if err := n.Status(ctx); err != nil {
@@ -412,19 +493,26 @@ func (n *NotebookLM) Run(
 	}
 	slog.Info("notebook created", "notebook_id", notebook.ID)
 
-	source, err := n.AddSource(ctx, notebook.ID, url)
-	if err != nil {
-		return PipelineOutput{}, fmt.Errorf("add source: %w", err)
-	}
-	slog.Info("source added", "source_id", source.ID)
+	addedSources := make([]Source, 0, len(cleanURLs))
+	for _, url := range cleanURLs {
+		source, addErr := n.AddSource(ctx, notebook.ID, url)
+		if addErr != nil {
+			return PipelineOutput{}, fmt.Errorf("add source %q: %w", url, addErr)
+		}
 
-	if err := n.WaitSource(
-		ctx,
-		notebook.ID,
-		source.ID,
-		timeoutSource,
-	); err != nil {
-		return PipelineOutput{}, fmt.Errorf("source wait failed: %w; manual retry: notebooklm source wait %s -n %s --timeout %d", err, source.ID, notebook.ID, int(timeoutSource.Seconds()))
+		slog.Info("source added", "source_id", source.ID, "source_url", source.URL)
+		addedSources = append(addedSources, source)
+	}
+
+	for _, source := range addedSources {
+		if err := n.WaitSource(
+			ctx,
+			notebook.ID,
+			source.ID,
+			n.timeoutSource,
+		); err != nil {
+			return PipelineOutput{}, fmt.Errorf("source wait failed: %w; manual retry: notebooklm source wait %s -n %s --timeout %d", err, source.ID, notebook.ID, int(n.timeoutSource.Seconds()))
+		}
 	}
 
 	reportArtifact, err := n.GenerateReport(
@@ -456,9 +544,9 @@ func (n *NotebookLM) Run(
 		ctx,
 		notebook.ID,
 		reportArtifact.ID,
-		timeoutArtifact,
+		n.timeoutArtifact,
 	); err != nil {
-		return PipelineOutput{}, fmt.Errorf("report wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, reportArtifact.ID, notebook.ID, int(timeoutArtifact.Seconds()))
+		return PipelineOutput{}, fmt.Errorf("report wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, reportArtifact.ID, notebook.ID, int(n.timeoutArtifact.Seconds()))
 	}
 	slog.Info("report artifact waited", "report_artifact_id", reportArtifact.ID)
 
@@ -466,24 +554,24 @@ func (n *NotebookLM) Run(
 		ctx,
 		notebook.ID,
 		infographicArtifact.ID,
-		timeoutArtifact,
+		n.timeoutArtifact,
 	); err != nil {
-		return PipelineOutput{}, fmt.Errorf("infographic wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, infographicArtifact.ID, notebook.ID, int(timeoutArtifact.Seconds()))
+		return PipelineOutput{}, fmt.Errorf("infographic wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, infographicArtifact.ID, notebook.ID, int(n.timeoutArtifact.Seconds()))
 	}
 	slog.Info("infographic artifact waited", "infographic_artifact_id", infographicArtifact.ID)
 
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return PipelineOutput{}, fmt.Errorf("create output dir: %w", err)
+	title, err := n.RenameNotebook(ctx, notebook.ID)
+	if err != nil {
+		return PipelineOutput{}, fmt.Errorf("rename notebook: %w", err)
 	}
+	baseName := sanitizeTitle(title, 100, notebook.ID)
 
-	baseName := sanitizeTitle(source.Title, 100, notebook.ID)
-
-	reportPath, err := uniquePath(outDir, baseName, ".md")
+	reportPath, err := uniquePath(n.outDir, baseName, ".md")
 	if err != nil {
 		return PipelineOutput{}, fmt.Errorf("pick report path: %w", err)
 	}
 
-	infographicPath, err := uniquePath(outDir, baseName, ".png")
+	infographicPath, err := uniquePath(n.outDir, baseName, ".png")
 	if err != nil {
 		return PipelineOutput{}, fmt.Errorf("pick infographic path: %w", err)
 	}
@@ -494,15 +582,6 @@ func (n *NotebookLM) Run(
 
 	if err := n.DownloadInfographic(ctx, notebook.ID, infographicArtifact.ID, infographicPath); err != nil {
 		return PipelineOutput{}, fmt.Errorf("download infographic: %w", err)
-	}
-
-	if err := n.RenameNotebook(ctx, notebook.ID, baseName); err != nil {
-		return PipelineOutput{}, fmt.Errorf("rename notebook: %w", err)
-	}
-
-	sources, err := n.ListSources(ctx, notebook.ID)
-	if err != nil {
-		return PipelineOutput{}, fmt.Errorf("get sources: %w", err)
 	}
 
 	report, err := os.ReadFile(reportPath)
@@ -517,7 +596,7 @@ func (n *NotebookLM) Run(
 
 	return PipelineOutput{
 		Image:  image,
-		Report: append(report, sources2links(sources)...),
+		Report: report,
 	}, nil
 }
 

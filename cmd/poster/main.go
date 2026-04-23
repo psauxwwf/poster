@@ -82,7 +82,7 @@ func main() {
 			}
 
 			_main := func() error {
-				_poster, err := poster.New(outDir, timeoutSource, timeoutArtifact, notebookLMBin)
+				_poster, err := poster.New(notebookLMBin, outDir, timeoutSource, timeoutArtifact)
 				if err != nil {
 					slog.Error("poster init failed", "error", err)
 					return err

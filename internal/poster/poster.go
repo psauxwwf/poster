@@ -64,15 +64,13 @@ RESTRICTIONS:
 - Do not include links to any third-party resources
 - Do not use raw HTML tags like <u>
 - Do not use callout syntax like [!QUOTE]
+- Do not use Markdown tables
+- If table-like data is needed, convert it into plain bullet lists
 - Do not ask for likes, subscriptions, comments, or other engagement actions`
 )
 
 type Poster struct {
 	notebooklm *notebooklm.NotebookLM
-	outDir     string
-
-	timeoutSource   time.Duration
-	timeoutArtifact time.Duration
 }
 
 type Mode int
@@ -83,50 +81,44 @@ const (
 	ModeDelete
 )
 
-func New(_outDir string, _timeoutSource, _timeoutArtifact time.Duration, _notebookLMBinary string) (*Poster, error) {
-	_outDir = strings.TrimSpace(_outDir)
-	if _outDir == "" {
-		_outDir = "./dist/notebooklm"
+func New(_notebookLMBinary string, outDir string, timeoutSource, timeoutArtifact time.Duration) (*Poster, error) {
+	outDir = strings.TrimSpace(outDir)
+	if outDir == "" {
+		outDir = "./dist/notebooklm"
 	}
 
-	if _timeoutSource <= 0 {
-		_timeoutSource = 10 * time.Minute
+	if timeoutSource <= 0 {
+		timeoutSource = 10 * time.Minute
 	}
 
-	if _timeoutArtifact <= 0 {
-		_timeoutArtifact = 15 * time.Minute
+	if timeoutArtifact <= 0 {
+		timeoutArtifact = 15 * time.Minute
 	}
 
-	nlm, err := notebooklm.New(_notebookLMBinary)
+	nlm, err := notebooklm.New(_notebookLMBinary, outDir, timeoutSource, timeoutArtifact)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Poster{
-		notebooklm:      nlm,
-		outDir:          _outDir,
-		timeoutSource:   _timeoutSource,
-		timeoutArtifact: _timeoutArtifact,
+		notebooklm: nlm,
 	}, nil
 }
 
-func (p *Poster) run(chatID int64, url string) ([]byte, []byte, error) {
+func (p *Poster) run(chatID int64, urls []string) ([]byte, []byte, error) {
 	if chatID != 0 {
-		slog.Info("starting poster pipeline from telegram", "chat_id", chatID, "url", url)
+		slog.Info("starting poster pipeline from telegram", "chat_id", chatID, "urls", urls)
 	}
 
 	result, err := p.notebooklm.Run(
 		context.Background(),
-		url,
-		p.outDir,
-		p.timeoutSource,
-		p.timeoutArtifact,
+		urls,
 		reportPrompt,
 		infographicStyle,
 	)
 	if err != nil {
 		if chatID != 0 {
-			slog.Error("poster pipeline failed", "chat_id", chatID, "error", err)
+			slog.Error("poster pipeline failed", "chat_id", chatID, "urls", urls, "error", err)
 		}
 		return nil, nil, err
 	}
@@ -140,7 +132,7 @@ func (p *Poster) run(chatID int64, url string) ([]byte, []byte, error) {
 	)
 
 	if chatID != 0 {
-		slog.Info("poster pipeline completed", "chat_id", chatID, "url", url)
+		slog.Info("poster pipeline completed", "chat_id", chatID, "urls", urls)
 	}
 
 	return result.Image, result.Report, nil
@@ -161,9 +153,8 @@ func (p *Poster) Execute(args []string, mode Mode, token string, adminID string)
 		}
 		return nil
 	case ModeURL:
-		url := args[0]
-		slog.Info("starting poster pipeline", "url", url)
-		if _, _, err := p.run(0, url); err != nil {
+		slog.Info("starting poster pipeline", "args", args)
+		if _, _, err := p.run(0, args); err != nil {
 			slog.Error("poster pipeline failed", "error", err)
 			return err
 		}
