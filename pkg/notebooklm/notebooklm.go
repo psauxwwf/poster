@@ -29,6 +29,10 @@ type addSourceResponse struct {
 	} `json:"source"`
 }
 
+type listSourcesResponse struct {
+	Sources []Source `json:"sources"`
+}
+
 type generateArtifactResponse struct {
 	TaskID string `json:"task_id"`
 	Status string `json:"status"`
@@ -47,6 +51,7 @@ type Notebook struct {
 
 type Source struct {
 	ID    string
+	URL   string
 	Title string
 	Raw   map[string]any
 }
@@ -60,7 +65,7 @@ type NotebookLM struct {
 	bin string
 }
 
-type YouTubePipelineOutput struct {
+type PipelineOutput struct {
 	Image  []byte
 	Report []byte
 }
@@ -149,23 +154,25 @@ func (n *NotebookLM) CreateNotebook(ctx context.Context, title string) (Notebook
 }
 
 func (n *NotebookLM) RenameNotebook(ctx context.Context, notebookID, newTitle string) error {
-	attempts := [][]string{
-		{"rename", newTitle, "--notebook", notebookID},
-		{"rename", "--notebook", notebookID, newTitle},
-		{"notebook", "rename", notebookID, newTitle},
-		{"notebook", "rename", newTitle, "--notebook", notebookID},
+	if _, _, err := n.run(ctx, "rename", "--notebook", notebookID, newTitle); err != nil {
+		return err
 	}
 
-	var errs []error
-	for _, args := range attempts {
-		_, _, callErr := n.run(ctx, args...)
-		if callErr == nil {
-			return nil
-		}
-		errs = append(errs, callErr)
+	return nil
+}
+
+func (n *NotebookLM) ListSources(ctx context.Context, notebookID string) ([]Source, error) {
+	_, raw, err := n.runJSON(ctx, "source", "list", "--notebook", notebookID, "--json")
+	if err != nil {
+		return nil, err
 	}
 
-	return errors.Join(errs...)
+	var parsed listSourcesResponse
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("parse source list response: %w", err)
+	}
+
+	return parsed.Sources, nil
 }
 
 func (n *NotebookLM) AddSource(ctx context.Context, notebookID, url string) (Source, error) {
@@ -189,7 +196,7 @@ func (n *NotebookLM) AddSource(ctx context.Context, notebookID, url string) (Sou
 		title = url
 	}
 
-	return Source{ID: sourceID, Title: title, Raw: resp}, nil
+	return Source{ID: sourceID, URL: strings.TrimSpace(url), Title: title, Raw: resp}, nil
 }
 
 func (n *NotebookLM) WaitSource(ctx context.Context, notebookID, sourceID string, timeout time.Duration) error {
@@ -381,7 +388,7 @@ func isRetryableNotebookLMError(err error) bool {
 		strings.Contains(msg, "eof")
 }
 
-func (n *NotebookLM) RunYouTubePipeline(
+func (n *NotebookLM) RunPipeline(
 	ctx context.Context,
 	url,
 	outDir string,
@@ -389,25 +396,25 @@ func (n *NotebookLM) RunYouTubePipeline(
 	timeoutArtifact time.Duration,
 	reportPrompt,
 	infographicStyle string,
-) (YouTubePipelineOutput, error) {
+) (PipelineOutput, error) {
 	if strings.TrimSpace(url) == "" {
-		return YouTubePipelineOutput{}, fmt.Errorf("empty url")
+		return PipelineOutput{}, fmt.Errorf("empty url")
 	}
 
 	if err := n.Status(ctx); err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("notebooklm is not ready: %w; run `notebooklm login`", err)
+		return PipelineOutput{}, fmt.Errorf("notebooklm is not ready: %w; run `notebooklm login`", err)
 	}
 
 	notebookName := fmt.Sprintf("yt-import-%s", time.Now().UTC().Format("20060102-150405"))
 	notebook, err := n.CreateNotebook(ctx, notebookName)
 	if err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("create notebook: %w", err)
+		return PipelineOutput{}, fmt.Errorf("create notebook: %w", err)
 	}
 	slog.Info("notebook created", "notebook_id", notebook.ID)
 
 	source, err := n.AddSource(ctx, notebook.ID, url)
 	if err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("add source: %w", err)
+		return PipelineOutput{}, fmt.Errorf("add source: %w", err)
 	}
 	slog.Info("source added", "source_id", source.ID)
 
@@ -417,7 +424,7 @@ func (n *NotebookLM) RunYouTubePipeline(
 		source.ID,
 		timeoutSource,
 	); err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("source wait failed: %w; manual retry: notebooklm source wait %s -n %s --timeout %d", err, source.ID, notebook.ID, int(timeoutSource.Seconds()))
+		return PipelineOutput{}, fmt.Errorf("source wait failed: %w; manual retry: notebooklm source wait %s -n %s --timeout %d", err, source.ID, notebook.ID, int(timeoutSource.Seconds()))
 	}
 
 	reportArtifact, err := n.GenerateReport(
@@ -428,7 +435,7 @@ func (n *NotebookLM) RunYouTubePipeline(
 		reportPrompt,
 	)
 	if err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("generate report: %w", err)
+		return PipelineOutput{}, fmt.Errorf("generate report: %w", err)
 	}
 	slog.Info("report start creating", "report_artifact_id", reportArtifact.ID)
 
@@ -441,7 +448,7 @@ func (n *NotebookLM) RunYouTubePipeline(
 		infographicStyle,
 	)
 	if err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("generate infographic: %w", err)
+		return PipelineOutput{}, fmt.Errorf("generate infographic: %w", err)
 	}
 	slog.Info("infographic start creating", "infographic_artifact_id", infographicArtifact.ID)
 
@@ -451,7 +458,7 @@ func (n *NotebookLM) RunYouTubePipeline(
 		reportArtifact.ID,
 		timeoutArtifact,
 	); err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("report wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, reportArtifact.ID, notebook.ID, int(timeoutArtifact.Seconds()))
+		return PipelineOutput{}, fmt.Errorf("report wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, reportArtifact.ID, notebook.ID, int(timeoutArtifact.Seconds()))
 	}
 	slog.Info("report artifact waited", "report_artifact_id", reportArtifact.ID)
 
@@ -461,49 +468,63 @@ func (n *NotebookLM) RunYouTubePipeline(
 		infographicArtifact.ID,
 		timeoutArtifact,
 	); err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("infographic wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, infographicArtifact.ID, notebook.ID, int(timeoutArtifact.Seconds()))
+		return PipelineOutput{}, fmt.Errorf("infographic wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, infographicArtifact.ID, notebook.ID, int(timeoutArtifact.Seconds()))
 	}
 	slog.Info("infographic artifact waited", "infographic_artifact_id", infographicArtifact.ID)
 
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("create output dir: %w", err)
+		return PipelineOutput{}, fmt.Errorf("create output dir: %w", err)
 	}
 
 	baseName := sanitizeTitle(source.Title, 100, notebook.ID)
 
 	reportPath, err := uniquePath(outDir, baseName, ".md")
 	if err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("pick report path: %w", err)
+		return PipelineOutput{}, fmt.Errorf("pick report path: %w", err)
 	}
 
 	infographicPath, err := uniquePath(outDir, baseName, ".png")
 	if err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("pick infographic path: %w", err)
+		return PipelineOutput{}, fmt.Errorf("pick infographic path: %w", err)
 	}
 
 	if err := n.DownloadReport(ctx, notebook.ID, reportArtifact.ID, reportPath); err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("download report: %w", err)
+		return PipelineOutput{}, fmt.Errorf("download report: %w", err)
 	}
 
 	if err := n.DownloadInfographic(ctx, notebook.ID, infographicArtifact.ID, infographicPath); err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("download infographic: %w", err)
+		return PipelineOutput{}, fmt.Errorf("download infographic: %w", err)
 	}
 
 	if err := n.RenameNotebook(ctx, notebook.ID, baseName); err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("rename notebook: %w", err)
+		return PipelineOutput{}, fmt.Errorf("rename notebook: %w", err)
+	}
+
+	sources, err := n.ListSources(ctx, notebook.ID)
+	if err != nil {
+		return PipelineOutput{}, fmt.Errorf("get sources: %w", err)
 	}
 
 	report, err := os.ReadFile(reportPath)
 	if err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("open report md: %w", err)
+		return PipelineOutput{}, fmt.Errorf("open report md: %w", err)
+	}
+
+	if len(sources) > 0 {
+		if len(report) > 0 {
+			report = append(report, '\n')
+		}
+		for _, source := range sources {
+			report = append(report, fmt.Appendf(nil, "- [%s](%s)\n", source.Title, source.URL)...)
+		}
 	}
 
 	image, err := os.ReadFile(infographicPath)
 	if err != nil {
-		return YouTubePipelineOutput{}, fmt.Errorf("open infographic png: %w", err)
+		return PipelineOutput{}, fmt.Errorf("open infographic png: %w", err)
 	}
 
-	return YouTubePipelineOutput{
+	return PipelineOutput{
 		Image:  image,
 		Report: report,
 	}, nil
@@ -533,7 +554,6 @@ func (n *NotebookLM) run(ctx context.Context, args ...string) (string, string, e
 	command := n.bin + " " + strings.Join(args, " ")
 
 	stdoutText, stderrText, err := cmd.Run(ctx, n.bin, args...)
-
 	if err != nil {
 		slog.Debug("notebooklm command failed", "command", command, "stdout", stdoutText, "stderr", stderrText, "error", err)
 		return stdoutText, stderrText, err

@@ -115,7 +115,7 @@ func (t *Tg) availableCommandsText() string {
 	return strings.Join(lines, "\n")
 }
 
-func (t *Tg) handleYT(chatID int64, args string, onYT func(chatID int64, url string) ([]byte, []byte, error)) error {
+func (t *Tg) handleRun(chatID int64, args string, onRun func(chatID int64, url string) ([]byte, []byte, error)) error {
 	url := t.youtube.FindString(strings.TrimSpace(args))
 	if url == "" {
 		return t.SendText(chatID, "Usage: /run <source-url>")
@@ -125,7 +125,7 @@ func (t *Tg) handleYT(chatID int64, args string, onYT func(chatID int64, url str
 		return err
 	}
 
-	image, report, err := onYT(chatID, url)
+	image, report, err := onRun(chatID, url)
 	if err != nil {
 		return t.SendText(chatID, fmt.Sprintf("Failed: %v", err))
 	}
