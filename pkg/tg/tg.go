@@ -13,7 +13,7 @@ import (
 
 type Tg struct {
 	bot      *tgbotapi.BotAPI
-	youtube  *regexp.Regexp
+	reurl    *regexp.Regexp
 	updateTO int
 }
 
@@ -37,7 +37,7 @@ func New(token string) (*Tg, error) {
 
 	return &Tg{
 		bot:      bot,
-		youtube:  regexp.MustCompile(`https?://\S+`),
+		reurl:    regexp.MustCompile(`https?://\S+`),
 		updateTO: 30,
 	}, nil
 }
@@ -51,9 +51,9 @@ func (t *Tg) RegisterCommands() error {
 	return nil
 }
 
-func (t *Tg) Run(ctx context.Context, adminID int64, onYT func(chatID int64, url string) ([]byte, []byte, error)) error {
-	if onYT == nil {
-		return fmt.Errorf("onYT handler is nil")
+func (t *Tg) Run(ctx context.Context, adminID int64, f func(int64, string) ([]byte, []byte, error)) error {
+	if f == nil {
+		return fmt.Errorf("handler is nil")
 	}
 	if adminID == 0 {
 		return fmt.Errorf("adminID is required")
@@ -88,11 +88,13 @@ func (t *Tg) Run(ctx context.Context, adminID int64, onYT func(chatID int64, url
 					return err
 				}
 			case "run":
-				chatID := update.Message.Chat.ID
-				args := update.Message.CommandArguments()
+				var (
+					chatID = update.Message.Chat.ID
+					args   = update.Message.CommandArguments()
+				)
 
 				go func() {
-					if err := t.handleYT(chatID, args, onYT); err != nil {
+					if err := t.handleRun(chatID, args, f); err != nil {
 						slog.Error("handle /run failed", "chat_id", chatID, "error", err)
 					}
 				}()
@@ -116,7 +118,7 @@ func (t *Tg) availableCommandsText() string {
 }
 
 func (t *Tg) handleRun(chatID int64, args string, onRun func(chatID int64, url string) ([]byte, []byte, error)) error {
-	url := t.youtube.FindString(strings.TrimSpace(args))
+	url := t.reurl.FindString(strings.TrimSpace(args))
 	if url == "" {
 		return t.SendText(chatID, "Usage: /run <source-url>")
 	}

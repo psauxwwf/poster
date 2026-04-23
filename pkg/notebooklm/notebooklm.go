@@ -388,7 +388,7 @@ func isRetryableNotebookLMError(err error) bool {
 		strings.Contains(msg, "eof")
 }
 
-func (n *NotebookLM) RunPipeline(
+func (n *NotebookLM) Run(
 	ctx context.Context,
 	url,
 	outDir string,
@@ -510,15 +510,6 @@ func (n *NotebookLM) RunPipeline(
 		return PipelineOutput{}, fmt.Errorf("open report md: %w", err)
 	}
 
-	if len(sources) > 0 {
-		if len(report) > 0 {
-			report = append(report, '\n')
-		}
-		for _, source := range sources {
-			report = append(report, fmt.Appendf(nil, "- [%s](%s)\n", source.Title, source.URL)...)
-		}
-	}
-
 	image, err := os.ReadFile(infographicPath)
 	if err != nil {
 		return PipelineOutput{}, fmt.Errorf("open infographic png: %w", err)
@@ -526,8 +517,25 @@ func (n *NotebookLM) RunPipeline(
 
 	return PipelineOutput{
 		Image:  image,
-		Report: report,
+		Report: append(report, sources2links(sources)...),
 	}, nil
+}
+
+func sources2links(sources []Source) []byte {
+	var b []byte
+	for _, source := range sources {
+		if source.URL == "" {
+			continue
+		}
+		b = append(b, fmt.Appendf(nil, "[%s](%s)\n", source.Title, source.URL)...)
+	}
+	if len(b) > 0 {
+		b = append(
+			[]byte{'\n', '\n'},
+			b...,
+		)
+	}
+	return b
 }
 
 func (n *NotebookLM) runJSON(ctx context.Context, args ...string) (map[string]any, []byte, error) {

@@ -110,8 +110,12 @@ func New(_outDir string, _timeoutSource, _timeoutArtifact time.Duration, _notebo
 	}, nil
 }
 
-func (p *Poster) run(url string) (notebooklm.PipelineOutput, error) {
-	result, err := p.notebooklm.RunPipeline(
+func (p *Poster) run(chatID int64, url string) ([]byte, []byte, error) {
+	if chatID != 0 {
+		slog.Info("starting poster pipeline from telegram", "chat_id", chatID, "url", url)
+	}
+
+	result, err := p.notebooklm.Run(
 		context.Background(),
 		url,
 		p.outDir,
@@ -121,7 +125,10 @@ func (p *Poster) run(url string) (notebooklm.PipelineOutput, error) {
 		infographicStyle,
 	)
 	if err != nil {
-		return notebooklm.PipelineOutput{}, err
+		if chatID != 0 {
+			slog.Error("poster pipeline failed", "chat_id", chatID, "error", err)
+		}
+		return nil, nil, err
 	}
 
 	slog.Info(
@@ -132,7 +139,11 @@ func (p *Poster) run(url string) (notebooklm.PipelineOutput, error) {
 		len(result.Image),
 	)
 
-	return result, nil
+	if chatID != 0 {
+		slog.Info("poster pipeline completed", "chat_id", chatID, "url", url)
+	}
+
+	return result.Image, result.Report, nil
 }
 
 func (p *Poster) Execute(args []string, mode Mode, token string, adminID string) error {
@@ -152,7 +163,7 @@ func (p *Poster) Execute(args []string, mode Mode, token string, adminID string)
 	case ModeURL:
 		url := args[0]
 		slog.Info("starting poster pipeline", "url", url)
-		if _, err := p.run(url); err != nil {
+		if _, _, err := p.run(0, url); err != nil {
 			slog.Error("poster pipeline failed", "error", err)
 			return err
 		}
@@ -164,7 +175,7 @@ func (p *Poster) Execute(args []string, mode Mode, token string, adminID string)
 }
 
 func (p *Poster) Serve(token string, adminID string) error {
-	parsedAdminID, err := strconv.ParseInt(strings.TrimSpace(adminID), 10, 64)
+	_adminID, err := strconv.ParseInt(strings.TrimSpace(adminID), 10, 64)
 	if err != nil {
 		return fmt.Errorf("invalid TELEGRAM_ADMIN_ID: %w", err)
 	}
@@ -178,28 +189,17 @@ func (p *Poster) Serve(token string, adminID string) error {
 	defer stop()
 
 	slog.Info("telegram bot started", "mode", "serve")
-	if err := bot.Run(ctx, parsedAdminID, p.runHandler()); err != nil {
+	if err := bot.Run(
+		ctx,
+		_adminID,
+		p.run,
+	); err != nil {
 		return err
 	}
 
 	slog.Info("telegram bot stopped")
 	return nil
 }
-
-func (p *Poster) runHandler() func(chatID int64, ytURL string) ([]byte, []byte, error) {
-	return func(chatID int64, ytURL string) ([]byte, []byte, error) {
-		slog.Info("starting poster pipeline from telegram", "chat_id", chatID, "url", ytURL)
-		result, err := p.run(ytURL)
-		if err != nil {
-			slog.Error("poster pipeline failed", "chat_id", chatID, "error", err)
-			return nil, nil, err
-		}
-
-		slog.Info("poster pipeline completed", "chat_id", chatID, "url", ytURL)
-		return result.Image, result.Report, nil
-	}
-}
-
 func (p *Poster) DeleteAll() error {
 	ctx := context.Background()
 
