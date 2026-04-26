@@ -2,3 +2,4 @@
 - [x] Telegram style for md
 - [x] Input from telegram bot, out to tg bot
 - [ ] notebooklm generate slide-deck --format=detailed --length=default --json
+- [ ] notebooklm generate audio --format=brief --length=short --json

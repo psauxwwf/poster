@@ -469,6 +469,7 @@ func isRetryableNotebookLMError(err error) bool {
 		strings.Contains(msg, "http 504") ||
 		strings.Contains(msg, "temporarily unavailable") ||
 		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "timed out") ||
 		strings.Contains(msg, "timeout") ||
 		strings.Contains(msg, "eof")
 }
@@ -572,7 +573,8 @@ func (n *NotebookLM) Run(
 
 	title, err := n.RenameNotebook(ctx, notebook.ID)
 	if err != nil {
-		return Out{}, fmt.Errorf("rename notebook: %w", err)
+		slog.Warn("rename notebook failed, using notebook id as filename", "notebook_id", notebook.ID, "error", err)
+		title = notebook.ID
 	}
 	baseName := sanitizeTitle(title, 100, notebook.ID)
 
