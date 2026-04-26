@@ -69,6 +69,28 @@ RESTRICTIONS:
 - Do not use Markdown tables
 - If table-like data is needed, convert it into plain bullet lists
 - Do not ask for likes, subscriptions, comments, or other engagement actions`
+
+	audioStyle = `TASK:
+Create one short audio script from the source content.
+
+DELIVERY:
+- Very fast pace
+- Dry, factual tone
+- No filler words, no small talk, no motivational phrases
+- No rhetorical questions
+- Focus on concrete points only
+
+STRUCTURE:
+- Start with a one-line topic statement
+- Then give dense fact blocks in logical order
+- Keep transitions minimal and functional
+- End with a brief factual wrap-up
+
+RULES:
+- Do not add information that is not in the source
+- Keep wording neutral and precise
+- Prefer numbers, names, commands, and key specifics when available
+- Avoid jokes, storytelling, and emotional language`
 )
 
 type Poster struct {
@@ -117,6 +139,7 @@ func (p *Poster) run(chatID int64, urls []string) (notebooklm.Out, error) {
 		urls,
 		reportPrompt,
 		infographicStyle,
+		audioStyle,
 	)
 	if err != nil {
 		if chatID != 0 {
@@ -173,6 +196,7 @@ func (p *Poster) Execute(cmd *cobra.Command, args []string, mode Mode) error {
 		if cmd != nil {
 			cmd.Println("image:", res.Image.Path)
 			cmd.Println("report:", res.Report.Path)
+			cmd.Println("audio:", res.Audio.Path)
 		}
 		return nil
 	default:

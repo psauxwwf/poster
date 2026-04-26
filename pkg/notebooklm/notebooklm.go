@@ -79,6 +79,7 @@ type NotebookLM struct {
 type Out struct {
 	Image  File
 	Report File
+	Audio  File
 }
 
 type File struct {
@@ -313,6 +314,51 @@ func (n *NotebookLM) GenerateReport(
 	return Artifact{ID: artifactID, Raw: resp}, nil
 }
 
+func (n *NotebookLM) GenerateAudio(
+	ctx context.Context,
+	notebookID string, format, length string, prompt ...string,
+) (Artifact, error) {
+	if strings.TrimSpace(format) == "" {
+		format = "brief"
+	}
+	if strings.TrimSpace(length) == "" {
+		length = "short"
+	}
+	args := []string{
+		"generate",
+		"audio",
+		"--format",
+		format,
+		"--length",
+		length,
+		"--notebook",
+		notebookID,
+		"--json",
+	}
+	if len(prompt) > 0 {
+		args = append(args, prompt[0])
+	}
+	resp, raw, err := n.runJSON(
+		ctx,
+		args...,
+	)
+	if err != nil {
+		return Artifact{}, err
+	}
+
+	var parsed generateArtifactResponse
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return Artifact{}, fmt.Errorf("parse generate audio response: %w", err)
+	}
+
+	artifactID := strings.TrimSpace(parsed.TaskID)
+	if artifactID == "" {
+		return Artifact{}, fmt.Errorf("artifact id not found in audio response")
+	}
+
+	return Artifact{ID: artifactID, Raw: resp}, nil
+}
+
 func (n *NotebookLM) GenerateInfographic(
 	ctx context.Context,
 	notebookID, detail, style, orientation string, prompt ...string,
@@ -414,6 +460,14 @@ func (n *NotebookLM) DownloadInfographic(ctx context.Context, notebookID, artifa
 	return nil
 }
 
+func (n *NotebookLM) DownloadAudio(ctx context.Context, notebookID, artifactID, outputPath string) error {
+	if _, _, err := n.runWithRetry(ctx, "download", "audio", outputPath, "-a", artifactID, "-n", notebookID); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (n *NotebookLM) runWithRetry(ctx context.Context, args ...string) (string, string, error) {
 	const maxAttempts = 6
 
@@ -478,7 +532,8 @@ func (n *NotebookLM) Run(
 	ctx context.Context,
 	urls []string,
 	reportPrompt,
-	infographicStyle string,
+	infographicStyle,
+	audioStyle string,
 ) (Out, error) {
 	cleanURLs := make([]string, 0, len(urls))
 	for _, url := range urls {
@@ -551,25 +606,40 @@ func (n *NotebookLM) Run(
 	}
 	slog.Info("infographic start creating", "infographic_artifact_id", infographicArtifact.ID)
 
-	if err := n.WaitArtifact(
+	audioArtifact, err := n.GenerateAudio(
 		ctx,
 		notebook.ID,
-		reportArtifact.ID,
-		n.timeoutArtifact,
-	); err != nil {
-		return Out{}, fmt.Errorf("report wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, reportArtifact.ID, notebook.ID, int(n.timeoutArtifact.Seconds()))
+		"brief",
+		"short",
+		audioStyle,
+	)
+	if err != nil {
+		return Out{}, fmt.Errorf("generate audio: %w", err)
 	}
-	slog.Info("report artifact waited", "report_artifact_id", reportArtifact.ID)
+	slog.Info("audio start creating", "audio_artifact_id", audioArtifact.ID)
 
-	if err := n.WaitArtifact(
-		ctx,
-		notebook.ID,
-		infographicArtifact.ID,
-		n.timeoutArtifact,
-	); err != nil {
-		return Out{}, fmt.Errorf("infographic wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, infographicArtifact.ID, notebook.ID, int(n.timeoutArtifact.Seconds()))
+	artifacts := []struct {
+		name   string
+		id     string
+		logKey string
+	}{
+		{name: "report", id: reportArtifact.ID, logKey: "report_artifact_id"},
+		{name: "infographic", id: infographicArtifact.ID, logKey: "infographic_artifact_id"},
+		{name: "audio", id: audioArtifact.ID, logKey: "audio_artifact_id"},
 	}
-	slog.Info("infographic artifact waited", "infographic_artifact_id", infographicArtifact.ID)
+
+	for _, artifact := range artifacts {
+		if err := n.WaitArtifact(
+			ctx,
+			notebook.ID,
+			artifact.id,
+			n.timeoutArtifact,
+		); err != nil {
+			return Out{}, fmt.Errorf("%s wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", artifact.name, err, artifact.id, notebook.ID, int(n.timeoutArtifact.Seconds()))
+		}
+
+		slog.Info(fmt.Sprintf("%s artifact waited", artifact.name), artifact.logKey, artifact.id)
+	}
 
 	title, err := n.RenameNotebook(ctx, notebook.ID)
 	if err != nil {
@@ -588,12 +658,21 @@ func (n *NotebookLM) Run(
 		return Out{}, fmt.Errorf("pick infographic path: %w", err)
 	}
 
+	audioPath, err := uniquePath(n.outDir, baseName, ".mp3")
+	if err != nil {
+		return Out{}, fmt.Errorf("pick audio path: %w", err)
+	}
+
 	if err := n.DownloadReport(ctx, notebook.ID, reportArtifact.ID, reportPath); err != nil {
 		return Out{}, fmt.Errorf("download report: %w", err)
 	}
 
 	if err := n.DownloadInfographic(ctx, notebook.ID, infographicArtifact.ID, infographicPath); err != nil {
 		return Out{}, fmt.Errorf("download infographic: %w", err)
+	}
+
+	if err := n.DownloadAudio(ctx, notebook.ID, audioArtifact.ID, audioPath); err != nil {
+		return Out{}, fmt.Errorf("download audio: %w", err)
 	}
 
 	report, err := os.ReadFile(reportPath)
@@ -606,6 +685,11 @@ func (n *NotebookLM) Run(
 		return Out{}, fmt.Errorf("open infographic png: %w", err)
 	}
 
+	audio, err := os.ReadFile(audioPath)
+	if err != nil {
+		return Out{}, fmt.Errorf("open audio mp3: %w", err)
+	}
+
 	return Out{
 		Image: File{
 			Data: image,
@@ -614,6 +698,10 @@ func (n *NotebookLM) Run(
 		Report: File{
 			Data: report,
 			Path: reportPath,
+		},
+		Audio: File{
+			Data: audio,
+			Path: audioPath,
 		},
 	}, nil
 }

@@ -1,5 +1,5 @@
 - [x] Dockerfile with path to ~/.notebooklm and docker-compose.yaml
 - [x] Telegram style for md
 - [x] Input from telegram bot, out to tg bot
+- [x] notebooklm generate audio --format=brief --length=short --json m4a
 - [ ] notebooklm generate slide-deck --format=detailed --length=default --json
-- [ ] notebooklm generate audio --format=brief --length=short --json

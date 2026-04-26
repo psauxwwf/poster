@@ -5,11 +5,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"strings"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"poster/pkg/notebooklm"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 type Tg struct {
@@ -134,12 +136,18 @@ func (t *Tg) handleRun(chatID int64, args string, onRun func(chatID int64, urls 
 	}
 
 	caption, chunks := MarkdownToTelegramHTMLCaptionAndChunks(out.Report.Data, telegramPhotoCaptionLimit, 0)
-	if err := t.SendPhoto(chatID, out.Image.Data, caption); err != nil {
+	if err := t.SendPhoto(chatID, out.Image.Data, out.Image.Path, caption); err != nil {
 		return err
 	}
 
 	for _, chunk := range chunks {
 		if err := t.SendHTML(chatID, chunk); err != nil {
+			return err
+		}
+	}
+
+	if len(out.Audio.Data) > 0 {
+		if err := t.SendAudio(chatID, out.Audio.Data, out.Audio.Path); err != nil {
 			return err
 		}
 	}
@@ -168,9 +176,14 @@ func (t *Tg) SendHTML(chatID int64, htmlText string) error {
 	return nil
 }
 
-func (t *Tg) SendPhoto(chatID int64, image []byte, caption string) error {
+func (t *Tg) SendPhoto(chatID int64, image []byte, path, caption string) error {
+	name := filepath.Base(strings.TrimSpace(path))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		name = "poster.png"
+	}
+
 	photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileReader{
-		Name:   "poster.png",
+		Name:   name,
 		Reader: bytes.NewReader(image),
 	})
 	if caption != "" {
@@ -180,6 +193,24 @@ func (t *Tg) SendPhoto(chatID int64, image []byte, caption string) error {
 	_, err := t.bot.Send(photo)
 	if err != nil {
 		return fmt.Errorf("send telegram photo: %w", err)
+	}
+
+	return nil
+}
+
+func (t *Tg) SendAudio(chatID int64, audio []byte, path string) error {
+	name := filepath.Base(strings.TrimSpace(path))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		name = "brief.mp3"
+	}
+
+	msg := tgbotapi.NewAudio(chatID, tgbotapi.FileReader{
+		Name:   name,
+		Reader: bytes.NewReader(audio),
+	})
+	_, err := t.bot.Send(msg)
+	if err != nil {
+		return fmt.Errorf("send telegram audio: %w", err)
 	}
 
 	return nil
