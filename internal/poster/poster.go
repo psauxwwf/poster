@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"poster/pkg/notebooklm"
 	"poster/pkg/tg"
 )
@@ -105,12 +107,12 @@ func New(_notebookLMBinary string, outDir string, timeoutSource, timeoutArtifact
 	}, nil
 }
 
-func (p *Poster) run(chatID int64, urls []string) ([]byte, []byte, error) {
+func (p *Poster) run(chatID int64, urls []string) (notebooklm.Out, error) {
 	if chatID != 0 {
 		slog.Info("starting poster pipeline from telegram", "chat_id", chatID, "urls", urls)
 	}
 
-	result, err := p.notebooklm.Run(
+	r, err := p.notebooklm.Run(
 		context.Background(),
 		urls,
 		reportPrompt,
@@ -120,45 +122,58 @@ func (p *Poster) run(chatID int64, urls []string) ([]byte, []byte, error) {
 		if chatID != 0 {
 			slog.Error("poster pipeline failed", "chat_id", chatID, "urls", urls, "error", err)
 		}
-		return nil, nil, err
+		return notebooklm.Out{}, err
 	}
 
 	slog.Info(
 		"outputs prepared",
 		"report_bytes",
-		len(result.Report),
+		len(r.Report.Data),
 		"image_bytes",
-		len(result.Image),
+		len(r.Image.Data),
 	)
 
 	if chatID != 0 {
 		slog.Info("poster pipeline completed", "chat_id", chatID, "urls", urls)
 	}
 
-	return result.Image, result.Report, nil
+	return r, nil
 }
 
-func (p *Poster) Execute(args []string, mode Mode, token string, adminID string) error {
+func (p *Poster) Execute(cmd *cobra.Command, args []string, mode Mode) error {
 	switch mode {
 	case ModeDelete:
-		if err := p.DeleteAll(); err != nil {
+		ids, err := p.DeleteAll()
+		if err != nil {
 			slog.Error("delete-all failed", "error", err)
 			return err
 		}
-		return nil
-	case ModeServe:
-		if err := p.Serve(token, adminID); err != nil {
-			slog.Error("telegram bot stopped with error", "error", err)
-			return err
+		if cmd != nil {
+			for _, id := range ids {
+				cmd.Println("deleted notebook:", id)
+			}
+			cmd.Println("delete completed")
 		}
 		return nil
 	case ModeURL:
 		slog.Info("starting poster pipeline", "args", args)
-		if _, _, err := p.run(0, args); err != nil {
+		res, err := p.run(0, args)
+		if err != nil {
 			slog.Error("poster pipeline failed", "error", err)
 			return err
 		}
+		slog.Info(
+			"poster artifacts saved",
+			"image_path",
+			res.Image.Path,
+			"report_path",
+			res.Report.Path,
+		)
 		slog.Info("poster pipeline completed")
+		if cmd != nil {
+			cmd.Println("image:", res.Image.Path)
+			cmd.Println("report:", res.Report.Path)
+		}
 		return nil
 	default:
 		return fmt.Errorf("unknown mode: %d", mode)
@@ -191,26 +206,29 @@ func (p *Poster) Serve(token string, adminID string) error {
 	slog.Info("telegram bot stopped")
 	return nil
 }
-func (p *Poster) DeleteAll() error {
+
+func (p *Poster) DeleteAll() ([]string, error) {
 	ctx := context.Background()
 
 	ids, err := p.notebooklm.ListNotebookIDs(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list notebooks: %w", err)
+		return nil, fmt.Errorf("failed to list notebooks: %w", err)
 	}
 	if len(ids) == 0 {
 		slog.Info("no notebooks to delete")
-		return nil
+		return nil, nil
 	}
 
+	deleted := make([]string, 0, len(ids))
 	slog.Info("deleting notebooks", "count", len(ids))
 	for _, id := range ids {
 		if err := p.notebooklm.DeleteNotebook(ctx, id); err != nil {
-			return fmt.Errorf("failed to delete notebook %s: %w", id, err)
+			return deleted, fmt.Errorf("failed to delete notebook %s: %w", id, err)
 		}
 		slog.Info("deleted notebook", "notebook_id", id)
+		deleted = append(deleted, id)
 	}
 
 	slog.Info("delete-all completed", "deleted", len(ids))
-	return nil
+	return deleted, nil
 }

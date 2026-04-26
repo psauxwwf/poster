@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"poster/pkg/notebooklm"
 )
 
 type Tg struct {
@@ -51,7 +52,7 @@ func (t *Tg) RegisterCommands() error {
 	return nil
 }
 
-func (t *Tg) Run(ctx context.Context, adminID int64, f func(int64, []string) ([]byte, []byte, error)) error {
+func (t *Tg) Run(ctx context.Context, adminID int64, f func(int64, []string) (notebooklm.Out, error)) error {
 	if f == nil {
 		return fmt.Errorf("handler is nil")
 	}
@@ -117,7 +118,7 @@ func (t *Tg) availableCommandsText() string {
 	return strings.Join(lines, "\n")
 }
 
-func (t *Tg) handleRun(chatID int64, args string, onRun func(chatID int64, urls []string) ([]byte, []byte, error)) error {
+func (t *Tg) handleRun(chatID int64, args string, onRun func(chatID int64, urls []string) (notebooklm.Out, error)) error {
 	urls := t.reurl.FindAllString(strings.TrimSpace(args), -1)
 	if len(urls) == 0 {
 		return t.SendText(chatID, "Usage: /run <source-url>")
@@ -127,13 +128,13 @@ func (t *Tg) handleRun(chatID int64, args string, onRun func(chatID int64, urls 
 		return err
 	}
 
-	image, report, err := onRun(chatID, urls)
+	out, err := onRun(chatID, urls)
 	if err != nil {
 		return t.SendText(chatID, fmt.Sprintf("Failed: %v", err))
 	}
 
-	caption, chunks := MarkdownToTelegramHTMLCaptionAndChunks(report, telegramPhotoCaptionLimit, 0)
-	if err := t.SendPhoto(chatID, image, caption); err != nil {
+	caption, chunks := MarkdownToTelegramHTMLCaptionAndChunks(out.Report.Data, telegramPhotoCaptionLimit, 0)
+	if err := t.SendPhoto(chatID, out.Image.Data, caption); err != nil {
 		return err
 	}
 

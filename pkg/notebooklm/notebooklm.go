@@ -76,9 +76,14 @@ type NotebookLM struct {
 	timeoutArtifact time.Duration
 }
 
-type PipelineOutput struct {
-	Image  []byte
-	Report []byte
+type Out struct {
+	Image  File
+	Report File
+}
+
+type File struct {
+	Data []byte
+	Path string
 }
 
 func New(
@@ -310,13 +315,16 @@ func (n *NotebookLM) GenerateReport(
 
 func (n *NotebookLM) GenerateInfographic(
 	ctx context.Context,
-	notebookID, detail, style string, prompt ...string,
+	notebookID, detail, style, orientation string, prompt ...string,
 ) (Artifact, error) {
 	if strings.TrimSpace(detail) == "" {
 		detail = "detailed"
 	}
 	if strings.TrimSpace(style) == "" {
 		style = "sketch-note"
+	}
+	if strings.TrimSpace(orientation) == "" {
+		orientation = "landscape"
 	}
 	args := []string{
 		"generate",
@@ -325,6 +333,8 @@ func (n *NotebookLM) GenerateInfographic(
 		detail,
 		"--style",
 		style,
+		"--orientation",
+		orientation,
 		"--notebook",
 		notebookID,
 		"--json",
@@ -468,7 +478,7 @@ func (n *NotebookLM) Run(
 	urls []string,
 	reportPrompt,
 	infographicStyle string,
-) (PipelineOutput, error) {
+) (Out, error) {
 	cleanURLs := make([]string, 0, len(urls))
 	for _, url := range urls {
 		url = strings.TrimSpace(url)
@@ -479,17 +489,17 @@ func (n *NotebookLM) Run(
 	}
 
 	if len(cleanURLs) == 0 {
-		return PipelineOutput{}, fmt.Errorf("empty urls")
+		return Out{}, fmt.Errorf("empty urls")
 	}
 
 	if err := n.Status(ctx); err != nil {
-		return PipelineOutput{}, fmt.Errorf("notebooklm is not ready: %w; run `notebooklm login`", err)
+		return Out{}, fmt.Errorf("notebooklm is not ready: %w; run `notebooklm login`", err)
 	}
 
 	notebookName := fmt.Sprintf("yt-import-%s", time.Now().UTC().Format("20060102-150405"))
 	notebook, err := n.CreateNotebook(ctx, notebookName)
 	if err != nil {
-		return PipelineOutput{}, fmt.Errorf("create notebook: %w", err)
+		return Out{}, fmt.Errorf("create notebook: %w", err)
 	}
 	slog.Info("notebook created", "notebook_id", notebook.ID)
 
@@ -497,7 +507,7 @@ func (n *NotebookLM) Run(
 	for _, url := range cleanURLs {
 		source, addErr := n.AddSource(ctx, notebook.ID, url)
 		if addErr != nil {
-			return PipelineOutput{}, fmt.Errorf("add source %q: %w", url, addErr)
+			return Out{}, fmt.Errorf("add source %q: %w", url, addErr)
 		}
 
 		slog.Info("source added", "source_id", source.ID, "source_url", source.URL)
@@ -511,7 +521,7 @@ func (n *NotebookLM) Run(
 			source.ID,
 			n.timeoutSource,
 		); err != nil {
-			return PipelineOutput{}, fmt.Errorf("source wait failed: %w; manual retry: notebooklm source wait %s -n %s --timeout %d", err, source.ID, notebook.ID, int(n.timeoutSource.Seconds()))
+			return Out{}, fmt.Errorf("source wait failed: %w; manual retry: notebooklm source wait %s -n %s --timeout %d", err, source.ID, notebook.ID, int(n.timeoutSource.Seconds()))
 		}
 	}
 
@@ -523,20 +533,20 @@ func (n *NotebookLM) Run(
 		reportPrompt,
 	)
 	if err != nil {
-		return PipelineOutput{}, fmt.Errorf("generate report: %w", err)
+		return Out{}, fmt.Errorf("generate report: %w", err)
 	}
 	slog.Info("report start creating", "report_artifact_id", reportArtifact.ID)
 
 	infographicArtifact, err := n.GenerateInfographic(
 		ctx,
 		notebook.ID,
-		// "detailed",
-		"standard",
+		"standard", // "detailed",
 		"sketch-note",
+		"portrait", // "landscape",
 		infographicStyle,
 	)
 	if err != nil {
-		return PipelineOutput{}, fmt.Errorf("generate infographic: %w", err)
+		return Out{}, fmt.Errorf("generate infographic: %w", err)
 	}
 	slog.Info("infographic start creating", "infographic_artifact_id", infographicArtifact.ID)
 
@@ -546,7 +556,7 @@ func (n *NotebookLM) Run(
 		reportArtifact.ID,
 		n.timeoutArtifact,
 	); err != nil {
-		return PipelineOutput{}, fmt.Errorf("report wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, reportArtifact.ID, notebook.ID, int(n.timeoutArtifact.Seconds()))
+		return Out{}, fmt.Errorf("report wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, reportArtifact.ID, notebook.ID, int(n.timeoutArtifact.Seconds()))
 	}
 	slog.Info("report artifact waited", "report_artifact_id", reportArtifact.ID)
 
@@ -556,47 +566,53 @@ func (n *NotebookLM) Run(
 		infographicArtifact.ID,
 		n.timeoutArtifact,
 	); err != nil {
-		return PipelineOutput{}, fmt.Errorf("infographic wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, infographicArtifact.ID, notebook.ID, int(n.timeoutArtifact.Seconds()))
+		return Out{}, fmt.Errorf("infographic wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", err, infographicArtifact.ID, notebook.ID, int(n.timeoutArtifact.Seconds()))
 	}
 	slog.Info("infographic artifact waited", "infographic_artifact_id", infographicArtifact.ID)
 
 	title, err := n.RenameNotebook(ctx, notebook.ID)
 	if err != nil {
-		return PipelineOutput{}, fmt.Errorf("rename notebook: %w", err)
+		return Out{}, fmt.Errorf("rename notebook: %w", err)
 	}
 	baseName := sanitizeTitle(title, 100, notebook.ID)
 
 	reportPath, err := uniquePath(n.outDir, baseName, ".md")
 	if err != nil {
-		return PipelineOutput{}, fmt.Errorf("pick report path: %w", err)
+		return Out{}, fmt.Errorf("pick report path: %w", err)
 	}
 
 	infographicPath, err := uniquePath(n.outDir, baseName, ".png")
 	if err != nil {
-		return PipelineOutput{}, fmt.Errorf("pick infographic path: %w", err)
+		return Out{}, fmt.Errorf("pick infographic path: %w", err)
 	}
 
 	if err := n.DownloadReport(ctx, notebook.ID, reportArtifact.ID, reportPath); err != nil {
-		return PipelineOutput{}, fmt.Errorf("download report: %w", err)
+		return Out{}, fmt.Errorf("download report: %w", err)
 	}
 
 	if err := n.DownloadInfographic(ctx, notebook.ID, infographicArtifact.ID, infographicPath); err != nil {
-		return PipelineOutput{}, fmt.Errorf("download infographic: %w", err)
+		return Out{}, fmt.Errorf("download infographic: %w", err)
 	}
 
 	report, err := os.ReadFile(reportPath)
 	if err != nil {
-		return PipelineOutput{}, fmt.Errorf("open report md: %w", err)
+		return Out{}, fmt.Errorf("open report md: %w", err)
 	}
 
 	image, err := os.ReadFile(infographicPath)
 	if err != nil {
-		return PipelineOutput{}, fmt.Errorf("open infographic png: %w", err)
+		return Out{}, fmt.Errorf("open infographic png: %w", err)
 	}
 
-	return PipelineOutput{
-		Image:  image,
-		Report: report,
+	return Out{
+		Image: File{
+			Data: image,
+			Path: infographicPath,
+		},
+		Report: File{
+			Data: report,
+			Path: reportPath,
+		},
 	}, nil
 }
 

@@ -44,4 +44,4 @@ COPY --from=builder /src/bin/poster ./poster
 
 ENTRYPOINT ["./poster"]
 
-CMD ["--serve"]
+CMD ["--serve", "--print-logs"]

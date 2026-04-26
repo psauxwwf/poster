@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -12,14 +13,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type Mode int
-
-const (
-	urlMode Mode = iota
-	serveMode
-	deleteMode
-)
-
 func main() {
 	var (
 		outDir          string
@@ -28,6 +21,7 @@ func main() {
 		notebookLMBin   string
 		logLevel        string
 		logFile         string
+		printLogs       bool
 		delete          bool
 		serve           bool
 	)
@@ -42,36 +36,7 @@ func main() {
 			return cobra.ExactArgs(1)(cmd, args)
 		},
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
-			var parsedLevel slog.Level
-			if err := parsedLevel.UnmarshalText([]byte(logLevel)); err != nil {
-				fmt.Fprintf(os.Stderr, "invalid log level %q: %v\n", logLevel, err)
-				return err
-			}
-
-			text := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-				AddSource: true,
-				Level:     parsedLevel,
-			})
-
-			log := slog.New(text)
-			if logFile != "" {
-				f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "failed to open log file %q: %v\n", logFile, err)
-					return err
-				}
-
-				log = slog.New(slog.NewMultiHandler(
-					text,
-					slog.NewJSONHandler(f, &slog.HandlerOptions{
-						AddSource: true,
-						Level:     parsedLevel,
-					}),
-				))
-			}
-
-			slog.SetDefault(log)
-			return nil
+			return setupLogger(logLevel, logFile, printLogs)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mode := poster.ModeURL
@@ -81,7 +46,7 @@ func main() {
 				mode = poster.ModeServe
 			}
 
-			_main := func() error {
+			runOnce := func() error {
 				_poster, err := poster.New(notebookLMBin, outDir, timeoutSource, timeoutArtifact)
 				if err != nil {
 					slog.Error("poster init failed", "error", err)
@@ -94,15 +59,19 @@ func main() {
 
 				token := toEnv(os.Getenv("TELEGRAM_BOT_TOKEN"))
 				adminID := toEnv(os.Getenv("TELEGRAM_ADMIN_ID"))
-				return _poster.Execute(args, mode, token, adminID)
+				if mode == poster.ModeServe {
+					return _poster.Serve(token, adminID)
+				}
+
+				return _poster.Execute(cmd, args, mode)
 			}
 
 			if mode != poster.ModeServe {
-				return _main()
+				return runOnce()
 			}
 
 			for {
-				if err := _main(); err != nil {
+				if err := runOnce(); err != nil {
 					slog.Error("serve loop failed, restarting", "error", err, "retry_in", "3s")
 					time.Sleep(3 * time.Second)
 					continue
@@ -119,6 +88,7 @@ func main() {
 	flags.StringVar(&notebookLMBin, "notebooklm-bin", "notebooklm", "path to notebooklm binary")
 	flags.StringVar(&logLevel, "log-level", "info", "log level: debug, info, warn, error")
 	flags.StringVar(&logFile, "log-file", "", "optional path to JSON log file")
+	flags.BoolVar(&printLogs, "print-logs", false, "print logs to stderr")
 	flags.BoolVar(&delete, "delete-all", false, "delete all notebooks and exit")
 	flags.BoolVar(&serve, "serve", false, "run telegram bot and process /yt commands")
 
@@ -157,6 +127,45 @@ func loadDotEnv(path string) error {
 		}
 	}
 
+	return nil
+}
+
+func setupLogger(logLevel, logFile string, printLogs bool) error {
+	var parsedLevel slog.Level
+	if err := parsedLevel.UnmarshalText([]byte(logLevel)); err != nil {
+		fmt.Fprintf(os.Stderr, "invalid log level %q: %v\n", logLevel, err)
+		return err
+	}
+
+	handlers := make([]slog.Handler, 0, 2)
+	if printLogs {
+		handlers = append(handlers, slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			AddSource: true,
+			Level:     parsedLevel,
+		}))
+	}
+
+	if logFile != "" {
+		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to open log file %q: %v\n", logFile, err)
+			return err
+		}
+		handlers = append(handlers, slog.NewJSONHandler(f, &slog.HandlerOptions{
+			AddSource: true,
+			Level:     parsedLevel,
+		}))
+	}
+
+	var handler slog.Handler = slog.NewTextHandler(io.Discard, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     parsedLevel,
+	})
+	if len(handlers) > 0 {
+		handler = slog.NewMultiHandler(handlers...)
+	}
+
+	slog.SetDefault(slog.New(handler))
 	return nil
 }
 
