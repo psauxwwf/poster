@@ -198,7 +198,7 @@ func (n *NotebookLM) RenameNotebook(ctx context.Context, notebookID string, titl
 }
 
 func (n *NotebookLM) Ask(ctx context.Context, notebookID string, prompt string) (string, error) {
-	_, raw, err := n.runJSON(ctx, "ask", "--notebook", notebookID, "--json", prompt)
+	_, raw, err := n.runJSONWithRetry(ctx, "ask", "--notebook", notebookID, "--json", prompt)
 	if err != nil {
 		return "", err
 	}
@@ -619,6 +619,26 @@ func sources2links(sources []Source) []byte {
 
 func (n *NotebookLM) runJSON(ctx context.Context, args ...string) (map[string]any, []byte, error) {
 	stdout, stderr, err := n.run(ctx, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if strings.TrimSpace(stdout) == "" {
+		return nil, nil, fmt.Errorf("empty output for `%s %s`", n.bin, strings.Join(args, " "))
+	}
+
+	raw := []byte(stdout)
+
+	var data map[string]any
+	if parseErr := json.Unmarshal(raw, &data); parseErr != nil {
+		return nil, nil, fmt.Errorf("invalid json for `%s %s`: %w; stdout=%q stderr=%q", n.bin, strings.Join(args, " "), parseErr, stdout, stderr)
+	}
+
+	return data, raw, nil
+}
+
+func (n *NotebookLM) runJSONWithRetry(ctx context.Context, args ...string) (map[string]any, []byte, error) {
+	stdout, stderr, err := n.runWithRetry(ctx, args...)
 	if err != nil {
 		return nil, nil, err
 	}
