@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/devil666face/poster:latest
+    image: ghcr.io/psauxwwf/poster:latest
     container_name: poster
     restart: unless-stopped
     stop_grace_period: 20s
