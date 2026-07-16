@@ -3,6 +3,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      cache_from:
+        - type=registry,ref=ghcr.io/psauxwwf/poster:latest
+      cache_to:
+        - type=inline
     image: ghcr.io/psauxwwf/poster:latest
     container_name: poster
     restart: unless-stopped

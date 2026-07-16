@@ -1,3 +1,5 @@
+---
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
 version: "3"
 
 dotenv: ["build.env"]
@@ -56,9 +58,15 @@ tasks:
 
   package:
     desc: build and push docker image
+    deps:
+      - docker:build
+    cmds:
+      - docker compose -f docker-compose.yaml push
+
+  docker:build:
+    desc: build docker image
     cmds:
       - docker compose -f docker-compose.yaml build
-      - docker compose -f docker-compose.yaml push
 
   docker:up:
     desc: build binaries and start app containers
