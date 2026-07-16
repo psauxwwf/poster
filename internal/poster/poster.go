@@ -22,19 +22,19 @@ const (
 Create one infographic image based on the source content.
 
 VISUAL STYLE:
-- Retro-futuristic, Fallout-inspired visual language
-- 1950s poster look, worn paper texture
-- Muted olive and amber palette
-- Bold block headings and simple technical callouts
-- Optimistic-but-cautionary mood
-- Prefer a generic smiling retro mascot inspired by Vault Boy
+- Simple hand-drawn sketch-note visual language
+- Clean light background with high contrast
+- Large readable headings and short labels
+- Minimal decorative details, focused on clarity
+- Use simple icons, arrows, boxes, and small diagrams
+- Mobile-first portrait composition with readable text on small screens
+- Friendly explanatory drawing style, easy to understand at a glance
 
 TEXT RULES:
-- Apply Fallout references only to visuals, not wording
 - Text must match the source article and stay neutral
-- Do not use franchise-like words such as "atomic", "vault", or similar
-- Never mention "VAULT-TEC" in text or labels
-- Keep all text highly readable and factually accurate`
+- Keep all text highly readable and factually accurate
+- Prefer short labels over long sentences
+- Do not add facts that are not present in the source`
 
 	reportPrompt = `TASK:
 Write a concise blog post in Markdown based on the source content.
