@@ -6,7 +6,7 @@
 - Infographic image: `.png`
 - Audio summary: `.mp3`
 
-It can also run as a Telegram bot that accepts `/run` commands from a single admin user.
+It can also run as a Telegram bot that accepts source-processing commands from a single admin user.
 
 ## What It Is For
 
@@ -148,7 +148,10 @@ Run the bot:
 Supported Telegram commands:
 
 - `/start`
-- `/run <url>`
+- `/post <url>`: send image and blog summary
+- `/full <url>`: send image, blog summary, and audio
+- `/summary <url>`: send only blog summary
+- `/image <url>`: send only infographic image
 
 Only the configured admin user is allowed to run commands.
 

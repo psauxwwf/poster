@@ -129,7 +129,7 @@ func New(_notebookLMBinary string, outDir string, timeoutSource, timeoutArtifact
 	}, nil
 }
 
-func (p *Poster) run(chatID int64, urls []string) (notebooklm.Out, error) {
+func (p *Poster) run(chatID int64, urls []string, outputs notebooklm.Outputs) (notebooklm.Out, error) {
 	if chatID != 0 {
 		slog.Info("starting poster pipeline from telegram", "chat_id", chatID, "urls", urls)
 	}
@@ -137,6 +137,7 @@ func (p *Poster) run(chatID int64, urls []string) (notebooklm.Out, error) {
 	r, err := p.notebooklm.Run(
 		context.Background(),
 		urls,
+		outputs,
 		reportPrompt,
 		infographicStyle,
 		audioStyle,
@@ -180,7 +181,7 @@ func (p *Poster) Execute(cmd *cobra.Command, args []string, mode Mode) error {
 		return nil
 	case ModeURL:
 		slog.Info("starting poster pipeline", "args", args)
-		res, err := p.run(0, args)
+		res, err := p.run(0, args, notebooklm.FullOutputs())
 		if err != nil {
 			slog.Error("poster pipeline failed", "error", err)
 			return err

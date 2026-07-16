@@ -22,7 +22,34 @@ type Tg struct {
 
 var botCommands = []tgbotapi.BotCommand{
 	{Command: "start", Description: "show available commands"},
-	{Command: "run", Description: "launch a pipeline for incoming sources"},
+	{Command: "post", Description: "send image and blog summary for sources"},
+	{Command: "full", Description: "send image, blog summary, and audio for sources"},
+	{Command: "summary", Description: "send only blog summary for sources"},
+	{Command: "image", Description: "send only infographic image for sources"},
+}
+
+type commandSpec struct {
+	Usage   string
+	Outputs notebooklm.Outputs
+}
+
+var commandSpecs = map[string]commandSpec{
+	"post": {
+		Usage:   "/post <source-url>",
+		Outputs: notebooklm.Outputs{Report: true, Image: true},
+	},
+	"full": {
+		Usage:   "/full <source-url>",
+		Outputs: notebooklm.FullOutputs(),
+	},
+	"summary": {
+		Usage:   "/summary <source-url>",
+		Outputs: notebooklm.Outputs{Report: true},
+	},
+	"image": {
+		Usage:   "/image <source-url>",
+		Outputs: notebooklm.Outputs{Image: true},
+	},
 }
 
 const telegramPhotoCaptionLimit = 1024
@@ -54,7 +81,7 @@ func (t *Tg) RegisterCommands() error {
 	return nil
 }
 
-func (t *Tg) Run(ctx context.Context, adminID int64, f func(int64, []string) (notebooklm.Out, error)) error {
+func (t *Tg) Run(ctx context.Context, adminID int64, f func(int64, []string, notebooklm.Outputs) (notebooklm.Out, error)) error {
 	if f == nil {
 		return fmt.Errorf("handler is nil")
 	}
@@ -85,24 +112,26 @@ func (t *Tg) Run(ctx context.Context, adminID int64, f func(int64, []string) (no
 				continue
 			}
 
-			switch update.Message.Command() {
+			command := update.Message.Command()
+			switch command {
 			case "start":
 				if err := t.SendText(update.Message.Chat.ID, t.availableCommandsText()); err != nil {
 					return err
 				}
-			case "run":
+			case "post", "full", "summary", "image":
 				var (
 					chatID = update.Message.Chat.ID
 					args   = update.Message.CommandArguments()
+					spec   = commandSpecs[command]
 				)
 
 				go func() {
-					if err := t.handleRun(chatID, args, f); err != nil {
-						slog.Error("handle /run failed", "chat_id", chatID, "error", err)
+					if err := t.handleCommand(chatID, args, spec, f); err != nil {
+						slog.Error("handle telegram command failed", "chat_id", chatID, "command", command, "error", err)
 					}
 				}()
 			default:
-				if err := t.SendText(update.Message.Chat.ID, "Unknown command. Use /run <source-url>"); err != nil {
+				if err := t.SendText(update.Message.Chat.ID, "Unknown command. Use /start to see available commands."); err != nil {
 					return err
 				}
 			}
@@ -120,33 +149,44 @@ func (t *Tg) availableCommandsText() string {
 	return strings.Join(lines, "\n")
 }
 
-func (t *Tg) handleRun(chatID int64, args string, onRun func(chatID int64, urls []string) (notebooklm.Out, error)) error {
+func (t *Tg) handleCommand(chatID int64, args string, spec commandSpec, onRun func(chatID int64, urls []string, outputs notebooklm.Outputs) (notebooklm.Out, error)) error {
 	urls := t.reurl.FindAllString(strings.TrimSpace(args), -1)
 	if len(urls) == 0 {
-		return t.SendText(chatID, "Usage: /run <source-url>")
+		return t.SendText(chatID, "Usage: "+spec.Usage)
 	}
 
 	if err := t.SendText(chatID, "Accepted, processing..."); err != nil {
 		return err
 	}
 
-	out, err := onRun(chatID, urls)
+	out, err := onRun(chatID, urls, spec.Outputs)
 	if err != nil {
 		return t.SendText(chatID, fmt.Sprintf("Failed: %v", err))
 	}
 
-	caption, chunks := MarkdownToTelegramHTMLCaptionAndChunks(out.Report.Data, telegramPhotoCaptionLimit, 0)
-	if err := t.SendPhoto(chatID, out.Image.Data, out.Image.Path, caption); err != nil {
-		return err
-	}
-
-	for _, chunk := range chunks {
-		if err := t.SendHTML(chatID, chunk); err != nil {
+	if spec.Outputs.Image {
+		caption := ""
+		var chunks []string
+		if spec.Outputs.Report {
+			caption, chunks = MarkdownToTelegramHTMLCaptionAndChunks(out.Report.Data, telegramPhotoCaptionLimit, 0)
+		}
+		if err := t.SendPhoto(chatID, out.Image.Data, out.Image.Path, caption); err != nil {
 			return err
+		}
+		for _, chunk := range chunks {
+			if err := t.SendHTML(chatID, chunk); err != nil {
+				return err
+			}
+		}
+	} else if spec.Outputs.Report {
+		for _, chunk := range MarkdownToTelegramHTMLChunks(out.Report.Data, 0) {
+			if err := t.SendHTML(chatID, chunk); err != nil {
+				return err
+			}
 		}
 	}
 
-	if len(out.Audio.Data) > 0 {
+	if spec.Outputs.Audio && len(out.Audio.Data) > 0 {
 		if err := t.SendAudio(chatID, out.Audio.Data, out.Audio.Path); err != nil {
 			return err
 		}
