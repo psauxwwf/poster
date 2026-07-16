@@ -90,7 +90,7 @@ func main() {
 	flags.StringVar(&logFile, "log-file", "", "optional path to JSON log file")
 	flags.BoolVar(&printLogs, "print-logs", false, "print logs to stderr")
 	flags.BoolVar(&delete, "delete-all", false, "delete all notebooks and exit")
-	flags.BoolVar(&serve, "serve", false, "run telegram bot and process /yt commands")
+	flags.BoolVar(&serve, "serve", false, "run telegram bot and process commands")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
