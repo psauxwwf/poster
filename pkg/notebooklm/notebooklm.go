@@ -92,6 +92,22 @@ func FullOutputs() Outputs {
 	return Outputs{Report: true, Image: true, Audio: true}
 }
 
+type outputKind int
+
+const (
+	outputReport outputKind = iota
+	outputImage
+	outputAudio
+)
+
+type outputArtifact struct {
+	kind     outputKind
+	name     string
+	id       string
+	logKey   string
+	artifact Artifact
+}
+
 type File struct {
 	Data []byte
 	Path string
@@ -546,8 +562,9 @@ func (n *NotebookLM) Run(
 	infographicStyle,
 	audioStyle string,
 ) (Out, error) {
-	if !outputs.Report && !outputs.Image && !outputs.Audio {
-		return Out{}, fmt.Errorf("no outputs requested")
+	outputKinds, err := outputs.kinds()
+	if err != nil {
+		return Out{}, err
 	}
 
 	cleanURLs := make([]string, 0, len(urls))
@@ -596,80 +613,13 @@ func (n *NotebookLM) Run(
 		}
 	}
 
-	var reportArtifact Artifact
-	if outputs.Report {
-		var err error
-		reportArtifact, err = n.GenerateReport(
-			ctx,
-			notebook.ID,
-			// "blog-post",
-			"custom",
-			reportPrompt,
-		)
+	artifacts := make([]outputArtifact, 0, len(outputKinds))
+	for _, kind := range outputKinds {
+		artifact, err := n.generateOutputArtifact(ctx, notebook.ID, kind, reportPrompt, infographicStyle, audioStyle)
 		if err != nil {
-			return Out{}, fmt.Errorf("generate report: %w", err)
+			return Out{}, err
 		}
-		slog.Info("report start creating", "report_artifact_id", reportArtifact.ID)
-	}
-
-	var infographicArtifact Artifact
-	if outputs.Image {
-		var err error
-		infographicArtifact, err = n.GenerateInfographic(
-			ctx,
-			notebook.ID,
-			"standard", // "detailed",
-			"sketch-note",
-			"portrait", // "landscape",
-			infographicStyle,
-		)
-		if err != nil {
-			return Out{}, fmt.Errorf("generate infographic: %w", err)
-		}
-		slog.Info("infographic start creating", "infographic_artifact_id", infographicArtifact.ID)
-	}
-
-	var audioArtifact Artifact
-	if outputs.Audio {
-		var err error
-		audioArtifact, err = n.GenerateAudio(
-			ctx,
-			notebook.ID,
-			"brief",
-			"short",
-			audioStyle,
-		)
-		if err != nil {
-			return Out{}, fmt.Errorf("generate audio: %w", err)
-		}
-		slog.Info("audio start creating", "audio_artifact_id", audioArtifact.ID)
-	}
-
-	artifacts := []struct {
-		name   string
-		id     string
-		logKey string
-	}{}
-	if outputs.Report {
-		artifacts = append(artifacts, struct {
-			name   string
-			id     string
-			logKey string
-		}{name: "report", id: reportArtifact.ID, logKey: "report_artifact_id"})
-	}
-	if outputs.Image {
-		artifacts = append(artifacts, struct {
-			name   string
-			id     string
-			logKey string
-		}{name: "infographic", id: infographicArtifact.ID, logKey: "infographic_artifact_id"})
-	}
-	if outputs.Audio {
-		artifacts = append(artifacts, struct {
-			name   string
-			id     string
-			logKey string
-		}{name: "audio", id: audioArtifact.ID, logKey: "audio_artifact_id"})
+		artifacts = append(artifacts, artifact)
 	}
 
 	for _, artifact := range artifacts {
@@ -693,61 +643,164 @@ func (n *NotebookLM) Run(
 	baseName := sanitizeTitle(title, 100, notebook.ID)
 
 	var out Out
-	if outputs.Report {
-		reportPath, err := uniquePath(n.outDir, baseName, ".md")
+	for _, artifact := range artifacts {
+		file, err := n.downloadOutput(ctx, notebook.ID, baseName, artifact)
 		if err != nil {
-			return Out{}, fmt.Errorf("pick report path: %w", err)
+			return Out{}, err
 		}
 
-		if err := n.DownloadReport(ctx, notebook.ID, reportArtifact.ID, reportPath); err != nil {
-			return Out{}, fmt.Errorf("download report: %w", err)
+		switch artifact.kind {
+		case outputReport:
+			out.Report = file
+		case outputImage:
+			out.Image = file
+		case outputAudio:
+			out.Audio = file
+		default:
+			return Out{}, fmt.Errorf("unknown output kind: %d", artifact.kind)
 		}
-
-		report, err := os.ReadFile(reportPath)
-		if err != nil {
-			return Out{}, fmt.Errorf("open report md: %w", err)
-		}
-
-		out.Report = File{Data: report, Path: reportPath}
-	}
-
-	if outputs.Image {
-		infographicPath, err := uniquePath(n.outDir, baseName, ".png")
-		if err != nil {
-			return Out{}, fmt.Errorf("pick infographic path: %w", err)
-		}
-
-		if err := n.DownloadInfographic(ctx, notebook.ID, infographicArtifact.ID, infographicPath); err != nil {
-			return Out{}, fmt.Errorf("download infographic: %w", err)
-		}
-
-		image, err := os.ReadFile(infographicPath)
-		if err != nil {
-			return Out{}, fmt.Errorf("open infographic png: %w", err)
-		}
-
-		out.Image = File{Data: image, Path: infographicPath}
-	}
-
-	if outputs.Audio {
-		audioPath, err := uniquePath(n.outDir, baseName, ".mp3")
-		if err != nil {
-			return Out{}, fmt.Errorf("pick audio path: %w", err)
-		}
-
-		if err := n.DownloadAudio(ctx, notebook.ID, audioArtifact.ID, audioPath); err != nil {
-			return Out{}, fmt.Errorf("download audio: %w", err)
-		}
-
-		audio, err := os.ReadFile(audioPath)
-		if err != nil {
-			return Out{}, fmt.Errorf("open audio mp3: %w", err)
-		}
-
-		out.Audio = File{Data: audio, Path: audioPath}
 	}
 
 	return out, nil
+}
+
+func (outputs Outputs) kinds() ([]outputKind, error) {
+	kinds := make([]outputKind, 0, 3)
+	if outputs.Report {
+		kinds = append(kinds, outputReport)
+	}
+	if outputs.Image {
+		kinds = append(kinds, outputImage)
+	}
+	if outputs.Audio {
+		kinds = append(kinds, outputAudio)
+	}
+	if len(kinds) == 0 {
+		return nil, fmt.Errorf("no outputs requested")
+	}
+
+	return kinds, nil
+}
+
+func (n *NotebookLM) generateOutputArtifact(
+	ctx context.Context,
+	notebookID string,
+	kind outputKind,
+	reportPrompt,
+	infographicStyle,
+	audioStyle string,
+) (outputArtifact, error) {
+	switch kind {
+	case outputReport:
+		artifact, err := n.GenerateReport(
+			ctx,
+			notebookID,
+			// "blog-post",
+			"custom",
+			reportPrompt,
+		)
+		if err != nil {
+			return outputArtifact{}, fmt.Errorf("generate report: %w", err)
+		}
+		slog.Info("report start creating", "report_artifact_id", artifact.ID)
+		return outputArtifact{kind: kind, name: "report", id: artifact.ID, logKey: "report_artifact_id", artifact: artifact}, nil
+	case outputImage:
+		artifact, err := n.GenerateInfographic(
+			ctx,
+			notebookID,
+			"standard", // "detailed",
+			"sketch-note",
+			"portrait", // "landscape",
+			infographicStyle,
+		)
+		if err != nil {
+			return outputArtifact{}, fmt.Errorf("generate infographic: %w", err)
+		}
+		slog.Info("infographic start creating", "infographic_artifact_id", artifact.ID)
+		return outputArtifact{kind: kind, name: "infographic", id: artifact.ID, logKey: "infographic_artifact_id", artifact: artifact}, nil
+	case outputAudio:
+		artifact, err := n.GenerateAudio(
+			ctx,
+			notebookID,
+			"brief",
+			"short",
+			audioStyle,
+		)
+		if err != nil {
+			return outputArtifact{}, fmt.Errorf("generate audio: %w", err)
+		}
+		slog.Info("audio start creating", "audio_artifact_id", artifact.ID)
+		return outputArtifact{kind: kind, name: "audio", id: artifact.ID, logKey: "audio_artifact_id", artifact: artifact}, nil
+	default:
+		return outputArtifact{}, fmt.Errorf("unknown output kind: %d", kind)
+	}
+}
+
+func (n *NotebookLM) downloadOutput(ctx context.Context, notebookID, baseName string, artifact outputArtifact) (File, error) {
+	switch artifact.kind {
+	case outputReport:
+		return n.downloadReport(ctx, notebookID, baseName, artifact.artifact)
+	case outputImage:
+		return n.downloadInfographic(ctx, notebookID, baseName, artifact.artifact)
+	case outputAudio:
+		return n.downloadAudio(ctx, notebookID, baseName, artifact.artifact)
+	default:
+		return File{}, fmt.Errorf("unknown output kind: %d", artifact.kind)
+	}
+}
+
+func (n *NotebookLM) downloadReport(ctx context.Context, notebookID, baseName string, artifact Artifact) (File, error) {
+	reportPath, err := uniquePath(n.outDir, baseName, ".md")
+	if err != nil {
+		return File{}, fmt.Errorf("pick report path: %w", err)
+	}
+
+	if err := n.DownloadReport(ctx, notebookID, artifact.ID, reportPath); err != nil {
+		return File{}, fmt.Errorf("download report: %w", err)
+	}
+
+	report, err := os.ReadFile(reportPath)
+	if err != nil {
+		return File{}, fmt.Errorf("open report md: %w", err)
+	}
+
+	return File{Data: report, Path: reportPath}, nil
+}
+
+func (n *NotebookLM) downloadInfographic(ctx context.Context, notebookID, baseName string, artifact Artifact) (File, error) {
+	infographicPath, err := uniquePath(n.outDir, baseName, ".png")
+	if err != nil {
+		return File{}, fmt.Errorf("pick infographic path: %w", err)
+	}
+
+	if err := n.DownloadInfographic(ctx, notebookID, artifact.ID, infographicPath); err != nil {
+		return File{}, fmt.Errorf("download infographic: %w", err)
+	}
+
+	image, err := os.ReadFile(infographicPath)
+	if err != nil {
+		return File{}, fmt.Errorf("open infographic png: %w", err)
+	}
+
+	return File{Data: image, Path: infographicPath}, nil
+}
+
+func (n *NotebookLM) downloadAudio(ctx context.Context, notebookID, baseName string, artifact Artifact) (File, error) {
+	audioPath, err := uniquePath(n.outDir, baseName, ".mp3")
+	if err != nil {
+		return File{}, fmt.Errorf("pick audio path: %w", err)
+	}
+
+	if err := n.DownloadAudio(ctx, notebookID, artifact.ID, audioPath); err != nil {
+		return File{}, fmt.Errorf("download audio: %w", err)
+	}
+
+	audio, err := os.ReadFile(audioPath)
+	if err != nil {
+		return File{}, fmt.Errorf("open audio mp3: %w", err)
+	}
+
+	return File{Data: audio, Path: audioPath}, nil
 }
 
 func sources2links(sources []Source) []byte {

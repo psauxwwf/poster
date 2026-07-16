@@ -20,6 +20,15 @@ type Tg struct {
 	updateTO int
 }
 
+type Handler func(int64, []string) (notebooklm.Out, error)
+
+type Handlers struct {
+	Post    Handler
+	Full    Handler
+	Summary Handler
+	Image   Handler
+}
+
 var botCommands = []tgbotapi.BotCommand{
 	{Command: "start", Description: "show available commands"},
 	{Command: "post", Description: "send image and blog summary for sources"},
@@ -29,26 +38,21 @@ var botCommands = []tgbotapi.BotCommand{
 }
 
 type commandSpec struct {
-	Usage   string
-	Outputs notebooklm.Outputs
+	Usage string
 }
 
 var commandSpecs = map[string]commandSpec{
 	"post": {
-		Usage:   "/post <source-url>",
-		Outputs: notebooklm.Outputs{Report: true, Image: true},
+		Usage: "/post <source-url>",
 	},
 	"full": {
-		Usage:   "/full <source-url>",
-		Outputs: notebooklm.FullOutputs(),
+		Usage: "/full <source-url>",
 	},
 	"summary": {
-		Usage:   "/summary <source-url>",
-		Outputs: notebooklm.Outputs{Report: true},
+		Usage: "/summary <source-url>",
 	},
 	"image": {
-		Usage:   "/image <source-url>",
-		Outputs: notebooklm.Outputs{Image: true},
+		Usage: "/image <source-url>",
 	},
 }
 
@@ -81,12 +85,19 @@ func (t *Tg) RegisterCommands() error {
 	return nil
 }
 
-func (t *Tg) Run(ctx context.Context, adminID int64, f func(int64, []string, notebooklm.Outputs) (notebooklm.Out, error)) error {
-	if f == nil {
-		return fmt.Errorf("handler is nil")
+func (t *Tg) Run(ctx context.Context, adminID int64, handlers Handlers) error {
+	if handlers.Post == nil || handlers.Full == nil || handlers.Summary == nil || handlers.Image == nil {
+		return fmt.Errorf("telegram command handler is nil")
 	}
 	if adminID == 0 {
 		return fmt.Errorf("adminID is required")
+	}
+
+	handlersByCommand := map[string]Handler{
+		"post":    handlers.Post,
+		"full":    handlers.Full,
+		"summary": handlers.Summary,
+		"image":   handlers.Image,
 	}
 
 	if err := t.RegisterCommands(); err != nil {
@@ -123,10 +134,11 @@ func (t *Tg) Run(ctx context.Context, adminID int64, f func(int64, []string, not
 					chatID = update.Message.Chat.ID
 					args   = update.Message.CommandArguments()
 					spec   = commandSpecs[command]
+					run    = handlersByCommand[command]
 				)
 
 				go func() {
-					if err := t.handleCommand(chatID, args, spec, f); err != nil {
+					if err := t.handleCommand(chatID, args, spec, run); err != nil {
 						slog.Error("handle telegram command failed", "chat_id", chatID, "command", command, "error", err)
 					}
 				}()
@@ -149,7 +161,7 @@ func (t *Tg) availableCommandsText() string {
 	return strings.Join(lines, "\n")
 }
 
-func (t *Tg) handleCommand(chatID int64, args string, spec commandSpec, onRun func(chatID int64, urls []string, outputs notebooklm.Outputs) (notebooklm.Out, error)) error {
+func (t *Tg) handleCommand(chatID int64, args string, spec commandSpec, onRun Handler) error {
 	urls := t.reurl.FindAllString(strings.TrimSpace(args), -1)
 	if len(urls) == 0 {
 		return t.SendText(chatID, "Usage: "+spec.Usage)
@@ -159,15 +171,16 @@ func (t *Tg) handleCommand(chatID int64, args string, spec commandSpec, onRun fu
 		return err
 	}
 
-	out, err := onRun(chatID, urls, spec.Outputs)
+	out, err := onRun(chatID, urls)
 	if err != nil {
 		return t.SendText(chatID, fmt.Sprintf("Failed: %v", err))
 	}
 
-	if spec.Outputs.Image {
+	switch {
+	case out.Image.Path != "":
 		caption := ""
 		var chunks []string
-		if spec.Outputs.Report {
+		if len(out.Report.Data) > 0 {
 			caption, chunks = MarkdownToTelegramHTMLCaptionAndChunks(out.Report.Data, telegramPhotoCaptionLimit, 0)
 		}
 		if err := t.SendPhoto(chatID, out.Image.Data, out.Image.Path, caption); err != nil {
@@ -178,7 +191,7 @@ func (t *Tg) handleCommand(chatID int64, args string, spec commandSpec, onRun fu
 				return err
 			}
 		}
-	} else if spec.Outputs.Report {
+	case len(out.Report.Data) > 0:
 		for _, chunk := range MarkdownToTelegramHTMLChunks(out.Report.Data, 0) {
 			if err := t.SendHTML(chatID, chunk); err != nil {
 				return err
@@ -186,7 +199,7 @@ func (t *Tg) handleCommand(chatID int64, args string, spec commandSpec, onRun fu
 		}
 	}
 
-	if spec.Outputs.Audio && len(out.Audio.Data) > 0 {
+	if len(out.Audio.Data) > 0 {
 		if err := t.SendAudio(chatID, out.Audio.Data, out.Audio.Path); err != nil {
 			return err
 		}

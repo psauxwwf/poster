@@ -164,6 +164,22 @@ func (p *Poster) run(chatID int64, urls []string, outputs notebooklm.Outputs) (n
 	return r, nil
 }
 
+func (p *Poster) Post(chatID int64, urls []string) (notebooklm.Out, error) {
+	return p.run(chatID, urls, notebooklm.Outputs{Report: true, Image: true})
+}
+
+func (p *Poster) Full(chatID int64, urls []string) (notebooklm.Out, error) {
+	return p.run(chatID, urls, notebooklm.FullOutputs())
+}
+
+func (p *Poster) Summary(chatID int64, urls []string) (notebooklm.Out, error) {
+	return p.run(chatID, urls, notebooklm.Outputs{Report: true})
+}
+
+func (p *Poster) Image(chatID int64, urls []string) (notebooklm.Out, error) {
+	return p.run(chatID, urls, notebooklm.Outputs{Image: true})
+}
+
 func (p *Poster) Execute(cmd *cobra.Command, args []string, mode Mode) error {
 	switch mode {
 	case ModeDelete:
@@ -223,7 +239,12 @@ func (p *Poster) Serve(token string, adminID string) error {
 	if err := bot.Run(
 		ctx,
 		_adminID,
-		p.run,
+		tg.Handlers{
+			Post:    p.Post,
+			Full:    p.Full,
+			Summary: p.Summary,
+			Image:   p.Image,
+		},
 	); err != nil {
 		return err
 	}
