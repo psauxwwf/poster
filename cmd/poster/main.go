@@ -5,9 +5,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"strings"
 	"time"
 
+	"poster/internal/config"
 	"poster/internal/poster"
 
 	"github.com/spf13/cobra"
@@ -47,20 +47,19 @@ func main() {
 			}
 
 			runOnce := func() error {
-				_poster, err := poster.New(notebookLMBin, outDir, timeoutSource, timeoutArtifact)
+				_config, err := config.Load(".env")
+				if err != nil {
+					return err
+				}
+
+				_poster, err := poster.New(notebookLMBin, outDir, timeoutSource, timeoutArtifact, _config.Proxychains)
 				if err != nil {
 					slog.Error("poster init failed", "error", err)
 					return err
 				}
 
-				if err := loadDotEnv(".env"); err != nil {
-					return err
-				}
-
-				token := toEnv(os.Getenv("TELEGRAM_BOT_TOKEN"))
-				adminID := toEnv(os.Getenv("TELEGRAM_ADMIN_ID"))
 				if mode == poster.ModeServe {
-					return _poster.Serve(token, adminID)
+					return _poster.Serve(_config.TelegramBotToken, _config.TelegramAdminID)
 				}
 
 				return _poster.Execute(cmd, args, mode)
@@ -97,39 +96,6 @@ func main() {
 		os.Exit(1)
 	}
 }
-
-func loadDotEnv(path string) error {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-
-	lines := strings.SplitSeq(string(content), "\n")
-	for line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		idx := strings.IndexByte(line, '=')
-		if idx <= 0 {
-			continue
-		}
-
-		key := strings.TrimSpace(line[:idx])
-		value := strings.TrimSpace(line[idx+1:])
-
-		if err := os.Setenv(key, value); err != nil {
-			return fmt.Errorf("set env %s: %w", key, err)
-		}
-	}
-
-	return nil
-}
-
 func setupLogger(logLevel, logFile string, printLogs bool) error {
 	var parsedLevel slog.Level
 	if err := parsedLevel.UnmarshalText([]byte(logLevel)); err != nil {
@@ -167,9 +133,4 @@ func setupLogger(logLevel, logFile string, printLogs bool) error {
 
 	slog.SetDefault(slog.New(handler))
 	return nil
-}
-
-func toEnv(value string) string {
-	value = strings.TrimSpace(value)
-	return strings.Trim(value, `"`+"'")
 }

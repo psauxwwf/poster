@@ -33,10 +33,14 @@ RUN apt-get update && \
         ca-certificates=* && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
+RUN curl -fsSL https://github.com/psauxwwf/proxychains/releases/latest/download/proxychains.tar.gz -o /tmp/proxychains.tar.gz && \
+    tar -xzf /tmp/proxychains.tar.gz -C /
+
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 COPY pyproject.toml uv.lock .python-version ./
 RUN uv sync --no-cache
+
 # RUN playwright install chromium && \
 #     rm -rf /root/.cache/* /tmp/* /var/tmp/*
 

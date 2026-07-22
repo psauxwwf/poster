@@ -105,7 +105,7 @@ const (
 	ModeDelete
 )
 
-func New(_notebookLMBinary string, outDir string, timeoutSource, timeoutArtifact time.Duration) (*Poster, error) {
+func New(_notebookLMBinary string, outDir string, timeoutSource, timeoutArtifact time.Duration, useProxychains bool) (*Poster, error) {
 	outDir = strings.TrimSpace(outDir)
 	if outDir == "" {
 		outDir = "./dist/notebooklm"
@@ -119,7 +119,7 @@ func New(_notebookLMBinary string, outDir string, timeoutSource, timeoutArtifact
 		timeoutArtifact = 15 * time.Minute
 	}
 
-	nlm, err := notebooklm.New(_notebookLMBinary, outDir, timeoutSource, timeoutArtifact)
+	nlm, err := notebooklm.New(_notebookLMBinary, outDir, timeoutSource, timeoutArtifact, useProxychains)
 	if err != nil {
 		return nil, err
 	}

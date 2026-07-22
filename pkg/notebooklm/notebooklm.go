@@ -71,6 +71,7 @@ type Artifact struct {
 
 type NotebookLM struct {
 	bin             string
+	baseArgs        []string
 	outDir          string
 	timeoutSource   time.Duration
 	timeoutArtifact time.Duration
@@ -116,13 +117,22 @@ type File struct {
 func New(
 	_bin, _outDir string,
 	_timeoutSource, _timeoutArtifact time.Duration,
+	useProxychains bool,
 ) (*NotebookLM, error) {
-	if strings.TrimSpace(_bin) == "" {
+	_bin = strings.TrimSpace(_bin)
+	if _bin == "" {
 		_bin = "notebooklm"
+	}
+	bin := _bin
+	var baseArgs []string
+	if useProxychains {
+		bin = "proxychains4"
+		baseArgs = []string{"-q", _bin}
 	}
 
 	n := &NotebookLM{
-		bin:             _bin,
+		bin:             bin,
+		baseArgs:        baseArgs,
 		outDir:          _outDir,
 		timeoutSource:   _timeoutSource,
 		timeoutArtifact: _timeoutArtifact,
@@ -498,7 +508,7 @@ func (n *NotebookLM) runWithRetry(ctx context.Context, args ...string) (string, 
 	const maxAttempts = 6
 
 	delay := 2 * time.Second
-	command := n.bin + " " + strings.Join(args, " ")
+	command := n.command(args...)
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		stdout, stderr, err := n.run(ctx, args...)
@@ -609,7 +619,7 @@ func (n *NotebookLM) Run(
 			source.ID,
 			n.timeoutSource,
 		); err != nil {
-			return Out{}, fmt.Errorf("source wait failed: %w; manual retry: notebooklm source wait %s -n %s --timeout %d", err, source.ID, notebook.ID, int(n.timeoutSource.Seconds()))
+			return Out{}, fmt.Errorf("source wait failed: %w; manual retry: %s", err, n.command("source", "wait", source.ID, "-n", notebook.ID, "--timeout", fmt.Sprintf("%d", int(n.timeoutSource.Seconds()))))
 		}
 	}
 
@@ -629,7 +639,7 @@ func (n *NotebookLM) Run(
 			artifact.id,
 			n.timeoutArtifact,
 		); err != nil {
-			return Out{}, fmt.Errorf("%s wait failed: %w; manual retry: notebooklm artifact wait %s -n %s --timeout %d", artifact.name, err, artifact.id, notebook.ID, int(n.timeoutArtifact.Seconds()))
+			return Out{}, fmt.Errorf("%s wait failed: %w; manual retry: %s", artifact.name, err, n.command("artifact", "wait", artifact.id, "-n", notebook.ID, "--timeout", fmt.Sprintf("%d", int(n.timeoutArtifact.Seconds()))))
 		}
 
 		slog.Info(fmt.Sprintf("%s artifact waited", artifact.name), artifact.logKey, artifact.id)
@@ -827,14 +837,14 @@ func (n *NotebookLM) runJSON(ctx context.Context, args ...string) (map[string]an
 	}
 
 	if strings.TrimSpace(stdout) == "" {
-		return nil, nil, fmt.Errorf("empty output for `%s %s`", n.bin, strings.Join(args, " "))
+		return nil, nil, fmt.Errorf("empty output for `%s`", n.command(args...))
 	}
 
 	raw := []byte(stdout)
 
 	var data map[string]any
 	if parseErr := json.Unmarshal(raw, &data); parseErr != nil {
-		return nil, nil, fmt.Errorf("invalid json for `%s %s`: %w; stdout=%q stderr=%q", n.bin, strings.Join(args, " "), parseErr, stdout, stderr)
+		return nil, nil, fmt.Errorf("invalid json for `%s`: %w; stdout=%q stderr=%q", n.command(args...), parseErr, stdout, stderr)
 	}
 
 	return data, raw, nil
@@ -847,23 +857,24 @@ func (n *NotebookLM) runJSONWithRetry(ctx context.Context, args ...string) (map[
 	}
 
 	if strings.TrimSpace(stdout) == "" {
-		return nil, nil, fmt.Errorf("empty output for `%s %s`", n.bin, strings.Join(args, " "))
+		return nil, nil, fmt.Errorf("empty output for `%s`", n.command(args...))
 	}
 
 	raw := []byte(stdout)
 
 	var data map[string]any
 	if parseErr := json.Unmarshal(raw, &data); parseErr != nil {
-		return nil, nil, fmt.Errorf("invalid json for `%s %s`: %w; stdout=%q stderr=%q", n.bin, strings.Join(args, " "), parseErr, stdout, stderr)
+		return nil, nil, fmt.Errorf("invalid json for `%s`: %w; stdout=%q stderr=%q", n.command(args...), parseErr, stdout, stderr)
 	}
 
 	return data, raw, nil
 }
 
 func (n *NotebookLM) run(ctx context.Context, args ...string) (string, string, error) {
-	command := n.bin + " " + strings.Join(args, " ")
+	runArgs := n.commandArgs(args...)
+	command := n.bin + " " + strings.Join(runArgs, " ")
 
-	stdoutText, stderrText, err := cmd.Run(ctx, n.bin, args...)
+	stdoutText, stderrText, err := cmd.Run(ctx, n.bin, runArgs...)
 	if err != nil {
 		slog.Debug("notebooklm command failed", "command", command, "stdout", stdoutText, "stderr", stderrText, "error", err)
 		return stdoutText, stderrText, err
@@ -872,6 +883,22 @@ func (n *NotebookLM) run(ctx context.Context, args ...string) (string, string, e
 	slog.Debug("notebooklm command response", "command", command, "stdout", stdoutText, "stderr", stderrText)
 
 	return stdoutText, stderrText, nil
+}
+
+func (n *NotebookLM) command(args ...string) string {
+	runArgs := n.commandArgs(args...)
+	if len(runArgs) == 0 {
+		return n.bin
+	}
+
+	return n.bin + " " + strings.Join(runArgs, " ")
+}
+
+func (n *NotebookLM) commandArgs(args ...string) []string {
+	runArgs := make([]string, 0, len(n.baseArgs)+len(args))
+	runArgs = append(runArgs, n.baseArgs...)
+	runArgs = append(runArgs, args...)
+	return runArgs
 }
 
 var (

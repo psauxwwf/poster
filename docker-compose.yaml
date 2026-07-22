@@ -1,5 +1,6 @@
 services:
   poster:
+    image: ghcr.io/psauxwwf/poster:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -7,35 +8,19 @@ services:
         - type=registry,ref=ghcr.io/psauxwwf/poster:latest
       cache_to:
         - type=inline
-    image: ghcr.io/psauxwwf/poster:latest
     container_name: poster
-    restart: unless-stopped
-    stop_grace_period: 20s
     volumes:
       - ~/.notebooklm:/root/.notebooklm
       - ./dist:/poster/dist
-    networks:
-      - poster
+      - ./proxychains.conf:/usr/local/etc/proxychains.conf:ro
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_ADMIN_ID: ${TELEGRAM_ADMIN_ID}
-
-  # watchtower:
-  #   image: containrrr/watchtower
-  #   container_name: watchtower
-  #   restart: unless-stopped
-  #   environment:
-  #     WATCHTOWER_CLEANUP: "true"
-  #     WATCHTOWER_POLL_INTERVAL: "300"
-  #     WATCHTOWER_INCLUDE_STOPPED: "true"
-  #     WATCHTOWER_TRACE: "true"
-  #     WATCHTOWER_REGISTRY_AUTH: "true"
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock
-  #     - ~/.docker/config.json:/config.json:ro
-  #   command: --debug poster
-  #   networks:
-  #     - poster
+      PROXYCHAINS: ${PROXYCHAINS}
+    networks:
+      - poster
+    restart: unless-stopped
+    stop_grace_period: 20s
 
 networks:
   poster:
