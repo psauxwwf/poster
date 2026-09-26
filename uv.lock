@@ -46,6 +46,15 @@ wheels = [
 ]
 
 [[package]]
+name = "filelock"
+version = "3.32.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/59/e19834834cb01a32febfbb0f8a23a9088088f5d45991824ff2bc3b5e8acb/filelock-3.32.7.tar.gz", hash = "sha256:37b8a3d9811b0f9aef7e5ec5c71bb320de52df51e6ca9bcd6f5ad81187660da7", size = 225154, upload-time = "2026-09-16T00:24:20.907Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/15/df/31098c5aeb4d966b553641472bd55fcf5fdfac953549894b8a765ba44e91/filelock-3.32.7-py3-none-any.whl", hash = "sha256:65ff0d0190ea42038b32bda4b77834fb05be2cad4c5b9b01aa4dfb3614536e52", size = 100157, upload-time = "2026-09-16T00:24:19.543Z" },
+]
+
+[[package]]
 name = "greenlet"
 version = "3.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -161,16 +170,17 @@ wheels = [
 
 [[package]]
 name = "notebooklm-py"
-version = "0.3.4"
+version = "0.8.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
+    { name = "filelock" },
     { name = "httpx" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/89/0d/b6fc53016dcfc4305f89d157a29ed09bc471f65b9b83c2affe66694db7bb/notebooklm_py-0.3.4.tar.gz", hash = "sha256:dc72f89b1eb4c0efbad8641a0ec83da2e631c5a926e029a93a258b0032b503c4", size = 8007875, upload-time = "2026-03-12T03:03:57.969Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/12/42/bb68d1e14993074f8b0acb81d0654a66b48e9c9820be2eac54b5d568f72b/notebooklm_py-0.8.3.tar.gz", hash = "sha256:7d444c19193e405bae7277b37c29a365c936a8d278a1f62910f6b06d92aabf2a", size = 23829916, upload-time = "2026-09-26T03:46:06.131Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/31/1f/73b1bb084dddb3e9b6387db2779496d90c2c34dc4685f1f2c81f07880d0d/notebooklm_py-0.3.4-py3-none-any.whl", hash = "sha256:da54004f546d6409c01b474d18d031afc13a02254e2cb383dd6ee3e0974f5b47", size = 168780, upload-time = "2026-03-12T03:03:56.003Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/78/277a3193bb5bc3a051de7d9cdcee8c98a4485328f9755dee1772294968f5/notebooklm_py-0.8.3-py3-none-any.whl", hash = "sha256:7e3e02057b3acf354d3dbc337c08869d2a4954c9c324f3271e272236cfcc2bfc", size = 2051740, upload-time = "2026-09-26T03:46:03.916Z" },
 ]
 
 [package.optional-dependencies]
@@ -206,7 +216,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "notebooklm-py", extras = ["browser"], specifier = ">=0.3.4" }]
+requires-dist = [{ name = "notebooklm-py", extras = ["browser"], specifier = ">=0.8.3" }]
 
 [[package]]
 name = "pyee"
